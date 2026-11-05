@@ -8,10 +8,10 @@ import android.graphics.Paint;
 import io.nayuki.qrcodegen.QrCode;
 
 /** QR bitmap for the admin URL (replaces ZXing; uses the vendored Nayuki generator, MIT). */
-final class Qr {
+public final class Qr {
     private Qr() { }
 
-    static Bitmap bitmap(String text, int size) {
+    public static Bitmap bitmap(String text, int size) {
         QrCode qr = QrCode.encodeText(text, QrCode.Ecc.MEDIUM);
         int n = qr.size;
         Bitmap b = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);

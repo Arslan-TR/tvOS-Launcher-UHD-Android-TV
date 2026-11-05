@@ -957,6 +957,12 @@ public class SettingsActivity extends Activity {
                     SceneHome.setWeatherShortcutEnabled(this, next);
                     refreshAll();
                 });
+        row(tr("Home screen widgets", "Ana ekran widget'ları"),
+                () -> Widgets.enabled(this) ? tr("On", "Açık") : tr("Off", "Kapalı"),
+                () -> {
+                    Widgets.setEnabled(this, !Widgets.enabled(this));
+                    refreshAll();
+                });
         row(tr("Classic Top Shelf suggestions", "Klasik Üst Raf önerileri"), () -> {
             switch (Suggestions.shelf(this)) {
                 case Suggestions.SHELF_RECS: return tr("Recommendations", "Öneriler");
@@ -3421,8 +3427,8 @@ public class SettingsActivity extends Activity {
                 this,
                 tr("Choose custom scene image", "Özel sahne görseli seçin") + (slot > 1 ? " (" + slot + ")" : ""),
                 false,
-                1920,
-                1080,
+                Scenes.sceneSize(this)[0],
+                Scenes.sceneSize(this)[1],
                 null,
                 null,
                 bmp -> {
@@ -4099,8 +4105,8 @@ public class SettingsActivity extends Activity {
                 this,
                 tr("Choose Lock Screen image", "Kilit Ekranı görseli seçin"),
                 false,
-                1920,
-                1080,
+                Scenes.sceneSize(this)[0],
+                Scenes.sceneSize(this)[1],
                 null,
                 null,
                 bmp -> {

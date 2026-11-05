@@ -185,6 +185,8 @@ public class PowerService extends AccessibilityService {
         }
     }
 
+    private long lastHomeHandOver;
+
     @Override
     protected void onServiceConnected() {
         instance = this;
@@ -713,6 +715,44 @@ public class PowerService extends AccessibilityService {
         return s != null && Build.VERSION.SDK_INT >= 28 && s.performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
     }
 
+    /**
+     * Writes text into the text field that has input focus in the foreground app (e.g. a browser's
+     * address bar). Uses ACTION_SET_TEXT, so Turkish and other non-ASCII characters work. Returns null
+     * on success, otherwise a short reason.
+     */
+    static String typeText(String text, boolean append) {
+        PowerService s = instance;
+        if (s == null) return "erişilebilirlik servisi kapalı";
+        android.view.accessibility.AccessibilityNodeInfo root = s.getRootInActiveWindow();
+        if (root == null) return "açık pencere okunamadı";
+        android.view.accessibility.AccessibilityNodeInfo n =
+                root.findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT);
+        if (n == null || !n.isEditable()) n = firstEditable(root);
+        if (n == null) return "TV'de açık bir yazı kutusu yok";
+        String base = "";
+        if (append) {
+            CharSequence cur = n.getText();
+            boolean hint = Build.VERSION.SDK_INT >= 26 && n.isShowingHintText();
+            if (cur != null && !hint) base = cur.toString();
+        }
+        android.os.Bundle b = new android.os.Bundle();
+        b.putCharSequence(
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, base + text);
+        boolean ok = n.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, b);
+        return ok ? null : "yazı kutusu metni kabul etmedi";
+    }
+
+    private static android.view.accessibility.AccessibilityNodeInfo firstEditable(
+            android.view.accessibility.AccessibilityNodeInfo n) {
+        if (n == null) return null;
+        if (n.isEditable() && n.isVisibleToUser()) return n;
+        for (int i = 0; i < n.getChildCount(); i++) {
+            android.view.accessibility.AccessibilityNodeInfo r = firstEditable(n.getChild(i));
+            if (r != null) return r;
+        }
+        return null;
+    }
+
     static boolean sendGlobalAction(int action) {
         PowerService s = instance;
         return s != null && s.performGlobalAction(action);
@@ -763,6 +803,16 @@ public class PowerService extends AccessibilityService {
         if (e != null && e.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && e.getPackageName() != null) {
             String fgPkg = e.getPackageName().toString();
             RecentAppsOverlay.recordAppUsed(this, fgPkg);
+
+            // The remote's Home key can still reach Google TV's launcher on this firmware (the key filter never
+            // sees it). Whenever that home screen comes up, hand over to ours.
+            CharSequence cls = e.getClassName();
+            long nowMs = SystemClock.elapsedRealtime();
+            if ("com.google.android.apps.tv.launcherx".equals(fgPkg) && cls != null
+                    && cls.toString().endsWith("HomeActivity") && nowMs - lastHomeHandOver > 1500) {
+                lastHomeHandOver = nowMs;
+                handler.post(() -> ButtonMapper.launchHome(this));
+            }
 
             // Fast boot guard: during the first 40s after system boot, if "Launch on System Boot" is enabled
             // and a stock OEM/Chinese TV launcher pops to the foreground, immediately bring tvOS Launcher to front!

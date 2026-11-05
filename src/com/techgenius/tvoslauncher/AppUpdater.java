@@ -220,6 +220,9 @@ public final class AppUpdater {
      * when a newer release is found.
      */
     public static void checkAutoUpdateIfNeeded(Activity activity) {
+        // Özel (uhd) derleme: GitHub'daki orijinal sürüm bizim değişiklikleri ezeceği için
+        // otomatik güncelleme penceresi kapalı. Elle kontrol (Ayarlar > Güncellemeler) duruyor.
+        if (true) return;
         if (activity == null || activity.isFinishing()) return;
         if (!isAutoUpdateEnabled(activity)) return;
         if (checking || downloading) return;

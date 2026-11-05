@@ -764,10 +764,10 @@ public final class CustomMedia {
     public static boolean setCustomSceneWallpaper(Context c, int slot, Bitmap raw) {
         if (c == null || raw == null) return false;
         int s = Math.max(1, Math.min(5, slot));
-        Bitmap cropped = scaleCenterCropOrFit(raw, 1920, 1080, true);
+        Bitmap cropped = scaleCenterCropOrFit(raw, Scenes.sceneSize(c)[0], Scenes.sceneSize(c)[1], true);
         File f = sceneWallFile(c, s);
         try (FileOutputStream fos = new FileOutputStream(f)) {
-            cropped.compress(Bitmap.CompressFormat.JPEG, 92, fos);
+            cropped.compress(Bitmap.CompressFormat.JPEG, 98, fos);
             fos.flush();
             long ts = System.currentTimeMillis();
             prefs(c).edit().putLong(sceneWallTsKey(s), ts).apply();
@@ -815,7 +815,7 @@ public final class CustomMedia {
         Bitmap cropped = scaleCenterCropOrFit(raw, 1920, 1080, true);
         File f = classicWallFile(c);
         try (FileOutputStream fos = new FileOutputStream(f)) {
-            cropped.compress(Bitmap.CompressFormat.JPEG, 92, fos);
+            cropped.compress(Bitmap.CompressFormat.JPEG, 98, fos);
             fos.flush();
             long ts = System.currentTimeMillis();
             prefs(c).edit().putLong(KEY_CLASSIC_WALL_TS, ts).apply();
@@ -863,10 +863,10 @@ public final class CustomMedia {
 
     public static boolean setCustomLockWallpaper(Context c, Bitmap raw) {
         if (c == null || raw == null) return false;
-        Bitmap cropped = scaleCenterCropOrFit(raw, 1920, 1080, true);
+        Bitmap cropped = scaleCenterCropOrFit(raw, Scenes.sceneSize(c)[0], Scenes.sceneSize(c)[1], true);
         File f = lockWallFile(c);
         try (FileOutputStream fos = new FileOutputStream(f)) {
-            cropped.compress(Bitmap.CompressFormat.JPEG, 92, fos);
+            cropped.compress(Bitmap.CompressFormat.JPEG, 98, fos);
             fos.flush();
             long ts = System.currentTimeMillis();
             prefs(c).edit().putLong("lock_wall_ts", ts).apply();
@@ -896,7 +896,7 @@ public final class CustomMedia {
         File f = lockWallFile(c);
         if (!f.exists() || f.length() == 0) return null;
         try {
-            Bitmap b = decodeBitmapFromFile(f, 1280, 720);
+            Bitmap b = decodeBitmapFromFile(f, Scenes.sceneSize(c)[0], Scenes.sceneSize(c)[1]);
             if (b != null) {
                 cachedLockWall = b;
                 cachedLockWallTs = ts;
@@ -1034,6 +1034,8 @@ public final class CustomMedia {
         int sw = src.getWidth();
         int sh = src.getHeight();
         if (sw <= 0 || sh <= 0) return src;
+        // Already exactly the target size (e.g. a 3840x2160 photo): no second full-size copy.
+        if (centerCrop && sw == targetW && sh == targetH) return src;
         if (centerCrop) {
             float scale = Math.max(targetW / (float) sw, targetH / (float) sh);
             float dw = sw * scale;

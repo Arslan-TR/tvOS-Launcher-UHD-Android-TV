@@ -4629,6 +4629,18 @@ public class MainActivity extends Activity {
             Canvas c = new Canvas(snap);
             c.scale(w / (float) screenW, h / (float) screenH);
             root.draw(c);
+            // The scene is a SurfaceView, which draws as a transparent hole in a software snapshot:
+            // put the current wallpaper behind it.
+            Bitmap sceneBg = Scenes.isScenesLook(this) && sceneHome != null ? sceneHome.sceneView.getCurrentBgBitmap() : null;
+            if (sceneBg != null && !sceneBg.isRecycled()) {
+                Bitmap under = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                Canvas uc = new Canvas(under);
+                uc.drawBitmap(sceneBg, null, new android.graphics.Rect(0, 0, w, h),
+                        new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG));
+                uc.drawBitmap(snap, 0, 0, null);
+                snap.recycle();
+                snap = under;
+            }
             Bitmap blurred = Ui.blur(snap, w / 2, h / 2, 4, 3);
             snap.recycle();
             if (blurred != null) iv.setImageBitmap(blurred);

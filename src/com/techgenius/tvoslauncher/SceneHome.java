@@ -55,6 +55,7 @@ final class SceneHome {
 
     LinearLayout whoBar;
     LinearLayout weatherBtn;
+    LinearLayout remoteBtn;
     ImageView weatherIcon;
     LinearLayout moonBtn;
     ImageView moonIcon;
@@ -120,9 +121,7 @@ final class SceneHome {
                     Bitmap blurred = Ui.glassBackdrop(bg, 192, 108);
                     host.handler.post(() -> {
                         if (blurred != null && Scenes.isScenesLook(host)) {
-                            host.glassBg = blurred;
-                            host.invalidateGlass();
-                            invalidateSceneGlass();
+                            blendGlassTo(blurred);
                         }
                     });
                 });
@@ -133,13 +132,99 @@ final class SceneHome {
         this.overlay.setClipChildren(false);
         this.overlay.setClipToPadding(false);
 
+        // Phone remote is reachable as soon as the launcher runs (the token is stable, no QR needed each time).
+        host.io.execute(() -> RemoteServer.get(host));
         buildTopBar();
+        buildWidgets();
         buildKeepWatchingShelf();
         buildBottomDock();
     }
 
+    /** Home widgets (iOS style calendar and analog clock); each has its own position, size and visibility. */
+    private Widgets.CalendarView calWidget;
+    private Widgets.ClockView clockWidget;
+
+    private void buildWidgets() {
+        calWidget = new Widgets.CalendarView(host);
+        calWidget.setElevation(dp(8));
+        overlay.addView(calWidget, new FrameLayout.LayoutParams(dp(124), dp(124), Gravity.TOP | Gravity.START));
+        clockWidget = new Widgets.ClockView(host);
+        clockWidget.setElevation(dp(8));
+        overlay.addView(clockWidget, new FrameLayout.LayoutParams(dp(124), dp(124), Gravity.TOP | Gravity.START));
+        refreshWidgets();
+    }
+
+    /** Re-reads the saved layout; called after the phone remote (or settings) changes it. */
+    void refreshWidgets() {
+        boolean all = Widgets.enabled(host);
+        place(calWidget, "cal", all);
+        place(clockWidget, "clock", all);
+    }
+
+    private void place(View v, String id, boolean all) {
+        if (v == null) return;
+        Widgets.Cfg c = Widgets.get(host, id);
+        v.setVisibility(all && c.visible ? View.VISIBLE : View.GONE);
+        int size = Math.round(dp(Widgets.BASE_DP) * c.scale);
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) v.getLayoutParams();
+        lp.width = size;
+        lp.height = size;
+        lp.leftMargin = Math.round(c.x * host.screenW);
+        lp.topMargin = Math.round(c.y * host.screenH);
+        v.setLayoutParams(lp);
+    }
+
+    private android.animation.ValueAnimator glassFade;
+    private Bitmap glassMixA, glassMixB;
+
+    /** Cross-dissolves the blurred glass backdrop to the new scene over the same 1.6 s the wallpaper takes. */
+    private void blendGlassTo(Bitmap to) {
+        if (glassFade != null) glassFade.cancel();
+        final Bitmap from = host.glassBg;
+        if (from == null || from.isRecycled() || from.getWidth() != to.getWidth() || from.getHeight() != to.getHeight()) {
+            host.glassBg = to;
+            host.invalidateGlass();
+            invalidateSceneGlass();
+            return;
+        }
+        // Snapshot, so the start frame is exactly what is on screen even if the last fade was cut short.
+        final Bitmap start = from.copy(Bitmap.Config.ARGB_8888, false);
+        if (glassMixA == null || glassMixA.getWidth() != to.getWidth() || glassMixA.getHeight() != to.getHeight()) {
+            glassMixA = Bitmap.createBitmap(to.getWidth(), to.getHeight(), Bitmap.Config.ARGB_8888);
+            glassMixB = Bitmap.createBitmap(to.getWidth(), to.getHeight(), Bitmap.Config.ARGB_8888);
+        }
+        final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+        final boolean[] flip = {false};
+        glassFade = android.animation.ValueAnimator.ofFloat(0f, 1f);
+        glassFade.setDuration(1600L);
+        final int[] lastStep = {-1};
+        glassFade.addUpdateListener(a -> {
+            float t = (Float) a.getAnimatedValue();
+            // The glass redraws every control and rebuilds its shaders, so move in ~12 steps rather than every frame.
+            int step = (int) (t * 12);
+            if (t < 1f && step == lastStep[0]) return;
+            lastStep[0] = step;
+            if (t >= 1f) {
+                host.glassBg = to;
+            } else {
+                Bitmap mix = flip[0] ? glassMixB : glassMixA;
+                flip[0] = !flip[0];
+                android.graphics.Canvas c = new android.graphics.Canvas(mix);
+                p.setAlpha(255);
+                c.drawBitmap(start, 0, 0, p);
+                p.setAlpha(Math.round(t * 255));
+                c.drawBitmap(to, 0, 0, p);
+                host.glassBg = mix;
+            }
+            host.invalidateGlass();
+            invalidateSceneGlass();
+        });
+        glassFade.start();
+    }
+
     void invalidateSceneGlass() {
         if (whoBar != null) whoBar.invalidate();
+        if (remoteBtn != null) remoteBtn.invalidate();
         if (weatherBtn != null) weatherBtn.invalidate();
         if (moonBtn != null) moonBtn.invalidate();
         if (dockBox != null) dockBox.invalidate();
@@ -159,7 +244,13 @@ final class SceneHome {
         topRightRow.setClipChildren(false);
         topRightRow.setClipToPadding(false);
         int grow = dp(6);
-        topRightRow.setPadding(grow, grow, grow, grow);
+        // Trailing slack so the last circle never sits on this row's own right edge (clipped there).
+        int slack = dp(10);
+        topRightRow.setPadding(grow, grow, grow + slack, grow);
+        // The scene is a SurfaceView behind the window; the window is made transparent wherever no view
+        // draws. A near-invisible background makes this whole row (padding included) count as drawn,
+        // so the circles' focus ring and grown edge are not cut by that transparent region.
+        topRightRow.setBackgroundColor(0x01000000);
 
         // Top-right Profile Switcher Pill (next to Control Panel button; hidden if only 1 person)
         whoBar = new LinearLayout(host);
@@ -210,6 +301,35 @@ final class SceneHome {
         wlp.rightMargin = dp(10);
         topRightRow.addView(whoBar, wlp);
         refreshWhoBar();
+
+        // Top-right Phone Remote shortcut (opens a QR code; the phone becomes the remote)
+        int rSize = dp(42);
+        remoteBtn = new LinearLayout(host);
+        remoteBtn.setOrientation(LinearLayout.HORIZONTAL);
+        remoteBtn.setGravity(Gravity.CENTER);
+        MainActivity.LiquidGlass remoteGlass = new MainActivity.LiquidGlass(
+                rSize / 2f, 0x6614161C, host.glassSource, host.screenW, host.screenH, host.unit);
+        remoteGlass.lens = dp(5);
+        remoteGlass.rimStrength = 0.45f;
+        remoteBtn.setBackground(remoteGlass);
+        remoteBtn.setFocusable(true);
+        remoteBtn.setClickable(true);
+        ImageView remoteIcon = new ImageView(host);
+        remoteIcon.setImageBitmap(Glyphs.get("remote", dp(19), 0xFFF4F4F6));
+        remoteBtn.addView(remoteIcon, new LinearLayout.LayoutParams(dp(19), dp(19)));
+        GradientDrawable remoteFocusRing = new GradientDrawable();
+        remoteFocusRing.setCornerRadius(rSize / 2f);
+        remoteFocusRing.setColor(Color.TRANSPARENT);
+        remoteFocusRing.setStroke(dp(2), Color.WHITE);
+        remoteBtn.setOnFocusChangeListener((v, has) -> {
+            v.setForeground(has ? remoteFocusRing : null);
+            v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f)
+                    .setDuration(180).setInterpolator(MainActivity.LIFT).start();
+        });
+        remoteBtn.setOnClickListener(v -> showRemoteSheet(v));
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(rSize, rSize);
+        rlp.rightMargin = dp(10);
+        topRightRow.addView(remoteBtn, rlp);
 
         // Top-right Weather Shortcut Button (icon only; opens 5-day forecast UI like Classic Home)
         int mSize = dp(42);
@@ -301,7 +421,7 @@ final class SceneHome {
         FrameLayout.LayoutParams trlp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP | Gravity.END);
-        trlp.rightMargin = dp(40) - grow;
+        trlp.rightMargin = dp(40) - grow - slack;
         trlp.topMargin = dp(28) - grow;
         overlay.addView(topRightRow, trlp);
     }
@@ -339,6 +459,7 @@ final class SceneHome {
     }
 
     void refreshWeatherBtn() {
+        refreshWidgets();
         if (weatherBtn == null) return;
         boolean show = isWeatherShortcutEnabled(host) && Weather.enabled(host);
         weatherBtn.setVisibility(show ? View.VISIBLE : View.GONE);
@@ -357,6 +478,16 @@ final class SceneHome {
             moonBtn.setPadding(dp(11.5f), 0, dp(11.5f), 0);
         }
         moonBtn.setMinimumWidth(mSize);
+        // Without the timer text the button is a plain circle: pin its width so the glass is never
+        // measured narrower than its own diameter (which clips the right edge).
+        ViewGroup.LayoutParams lp = moonBtn.getLayoutParams();
+        if (lp != null) {
+            int w = left > 0 ? ViewGroup.LayoutParams.WRAP_CONTENT : mSize;
+            if (lp.width != w) {
+                lp.width = w;
+                moonBtn.setLayoutParams(lp);
+            }
+        }
     }
 
     // ---------------------------------------------------------------- Keep Watching Glass Shelf
@@ -1754,6 +1885,86 @@ final class SceneHome {
         return chip;
     }
 
+    /** Phone remote sheet: a QR code for the TV's local address; the phone opens the page and controls the TV. */
+    void showRemoteSheet(View returnTo) {
+        closeSheet();
+        sheetReturnFocus = returnTo;
+        sheetLayer = new FrameLayout(host);
+        sheetLayer.setClickable(true);
+        sheetLayer.setClipChildren(false);
+        sheetLayer.setClipToPadding(false);
+
+        LinearLayout card = new LinearLayout(host);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setPadding(dp(26), dp(22), dp(26), dp(22));
+        MainActivity.LiquidGlass glass = new MainActivity.LiquidGlass(
+                dp(22), 0xD11C181E, host.glassSource, host.screenW, host.screenH, host.unit);
+        glass.lens = dp(7);
+        card.setBackground(glass);
+        card.setOutlineProvider(host.roundedOutline(new float[]{dp(22)}));
+        card.setClipToOutline(true);
+        card.setElevation(dp(24));
+
+        TextView title = new TextView(host);
+        Ui.textSize(title, 16f);
+        title.setTypeface(Ui.font(host, "semibold"));
+        title.setTextColor(0xFFF4F4F6);
+        title.setText(I18n.s(host, "Phone remote", "Mobil kumanda"));
+        card.addView(title);
+
+        TextView sub = new TextView(host);
+        Ui.textSize(sub, 11.5f);
+        sub.setTypeface(Ui.font(host, "regular"));
+        sub.setTextColor(0xB3F4F4F6);
+        sub.setGravity(Gravity.CENTER);
+        sub.setText(I18n.s(host, "Scan with your phone camera (same Wi-Fi). Nothing to install.",
+                "Telefon kamerasıyla okut (aynı Wi-Fi). Uygulama kurmaya gerek yok."));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = dp(4);
+        slp.bottomMargin = dp(14);
+        card.addView(sub, slp);
+
+        java.util.List<String> urls = RemoteServer.get(host).urls();
+        String url = urls.isEmpty() ? null : urls.get(0);
+        int qrPx = dp(190);
+        if (url != null) {
+            ImageView qr = new ImageView(host);
+            Bitmap qb = com.techgenius.tvoslauncher.present.Qr.bitmap(url, qrPx);
+            qr.setImageBitmap(qb);
+            GradientDrawable qbg = new GradientDrawable();
+            qbg.setCornerRadius(dp(12));
+            qbg.setColor(Color.WHITE);
+            qr.setBackground(qbg);
+            qr.setPadding(dp(10), dp(10), dp(10), dp(10));
+            card.addView(qr, new LinearLayout.LayoutParams(qrPx + dp(20), qrPx + dp(20)));
+        }
+
+        TextView addr = new TextView(host);
+        Ui.textSize(addr, 11f);
+        addr.setTypeface(Ui.font(host, "medium"));
+        addr.setTextColor(0xCCF4F4F6);
+        addr.setGravity(Gravity.CENTER);
+        addr.setText(url == null
+                ? I18n.s(host, "No Wi-Fi/Ethernet connection found", "Wi-Fi/Ethernet bağlantısı bulunamadı")
+                : url.substring(0, url.indexOf("?k=")));
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp.topMargin = dp(12);
+        card.addView(addr, alp);
+
+        FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        sheetLayer.addView(card, clp);
+        host.root.addView(sheetLayer, host.match());
+        sheetLayer.setAlpha(0f);
+        card.setScaleX(0.94f);
+        card.setScaleY(0.94f);
+        sheetLayer.animate().alpha(1f).setDuration(180).start();
+        card.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(MainActivity.LIFT).start();
+    }
+
     boolean isSheetOpen() {
         return sheetLayer != null;
     }
@@ -1844,27 +2055,18 @@ final class SceneHome {
         }
 
         // Top Bar navigation
-        boolean whoVisible = whoBar != null && whoBar.getVisibility() == View.VISIBLE;
-        boolean wxVisible = weatherBtn != null && weatherBtn.getVisibility() == View.VISIBLE;
-        if (f == whoBar || f == weatherBtn || f == moonBtn) {
-            if (k == KeyEvent.KEYCODE_DPAD_RIGHT) {
+        View[] topRow = {whoBar, remoteBtn, weatherBtn, moonBtn};
+        int topIdx = -1;
+        for (int i = 0; i < topRow.length; i++) if (topRow[i] != null && topRow[i] == f) topIdx = i;
+        if (topIdx >= 0) {
+            if (k == KeyEvent.KEYCODE_DPAD_RIGHT || k == KeyEvent.KEYCODE_DPAD_LEFT) {
                 if (down) {
-                    if (f == whoBar) {
-                        if (wxVisible) weatherBtn.requestFocus();
-                        else moonBtn.requestFocus();
-                    } else if (f == weatherBtn) {
-                        moonBtn.requestFocus();
-                    }
-                }
-                return true;
-            }
-            if (k == KeyEvent.KEYCODE_DPAD_LEFT) {
-                if (down) {
-                    if (f == moonBtn) {
-                        if (wxVisible) weatherBtn.requestFocus();
-                        else if (whoVisible) whoBar.requestFocus();
-                    } else if (f == weatherBtn && whoVisible) {
-                        whoBar.requestFocus();
+                    int step = k == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : -1;
+                    for (int i = topIdx + step; i >= 0 && i < topRow.length; i += step) {
+                        if (topRow[i] != null && topRow[i].getVisibility() == View.VISIBLE) {
+                            topRow[i].requestFocus();
+                            break;
+                        }
                     }
                 }
                 return true;
