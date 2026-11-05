@@ -1996,7 +1996,7 @@ public class MainActivity extends Activity {
 
     /** Continue Watching can be switched off per profile (Settings -> Continue Watching); off by default. */
     boolean cwEnabled() {
-        return Profiles.homePrefs(this).getBoolean("cw_enabled", false);
+        return Profiles.homePrefs(this).getBoolean("cw_enabled", true);
     }
 
     /** The tab bar only appears when there are two things to switch between. */
