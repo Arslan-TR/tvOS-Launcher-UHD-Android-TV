@@ -1,252 +1,75 @@
-# tvOS Launcher (`v2.1.2`)
+# tvOS Launcher UHD: Apple TV style home screen for Android TV & Google TV
 
-> 🇹🇷 **Türkçe dokümantasyon ve kurulum rehberi için:** **[README_TR.md (Türkçe)](README_TR.md)**  
-> 📦 **Download Latest APK (`v2.1.2`):** **[GitHub Releases](https://github.com/techgenius1/tvOS-Launcher/releases/latest)**
+> 🇹🇷 Türkçe: **[README_TR.md](README_TR.md)** · Original project: **[README_UPSTREAM.md](README_UPSTREAM.md)**
 
-![tvOS Launcher Header](screenshots_en/Header_EN.jpg)
+![Android TV home screen in tvOS / Apple TV style with clock and calendar widgets](docs/uhd/hero-home-clock-calendar.jpg)
 
-A fast, lightweight, tvOS 26 & macOS–inspired home screen for Android TV & Google TV — built in pure Java with zero third-party runtime dependencies (**~30 MB private RAM / ~38 MB total PSS, `0.0%` background CPU**). Designed to stay buttery-smooth even on 1 GB RAM TV boxes while bringing a **resizable Liquid Glass Dock (`50%–150%`)**, rotating **Night Scenes**, **Custom Wallpapers (`Custom 1..5`) + Wallpaper Folder Shuffle**, a **Built-In Lock Screen / Idle Screensaver**, an **App Icon Changer & Interactive Icon Editor**, **Automatic GitHub App Updates**, a **built-in PC-free CleanYourTV Debloater (341 TV models + Manual System App Debloater + Stock Launcher Disabler)**, a **Customizable Glass Control Panel (`Quick Settings`) overlay**, a **Recent Apps Switcher**, **multi-tap (`1x / 2x / 3x`) Remote Button Remapping + Send Key Code + Home Button Fix**, and **Dual-Mode Secure Local ADB Setup (Self-Repair & Volume Hold Fix without keeping port 5555 open)** to any Android TV.
+A fork of [techgenius1/tvOS-Launcher](https://github.com/techgenius1/tvOS-Launcher) (v2.1.2, Apache-2.0) that turns a
+cheap Android TV or Google TV box into an Apple-TV-style TV. It keeps everything upstream has (liquid-glass dock,
+night scenes, Continue Watching, debloater) and adds a **phone remote with no app to install**, **home-screen widgets**
+(clock, calendar), a **video / fireplace screensaver with a clock**, **4K scenes** and a few quality-of-life fixes.
+Built and tested on a 1.8 GB RAM MediaTek TV (Android 14), so it stays light.
 
----
+Keywords: Android TV launcher, Google TV launcher, tvOS launcher, Apple TV style home screen, liquid glass dock,
+Android TV screensaver, fireplace screensaver, phone remote control, TV widgets, 4K wallpapers, Mi Box, Chromecast with Google TV.
 
-## 🆕 What's New in `v2.1.2`
+## What this fork adds
 
-- **Universal Continue Watching for All Media Apps**:
-  - Expanded Continue Watching support beyond YouTube to all installed media apps (Prime Video, HBO Max, Tivimate, Netflix, Disney+, Apple TV+, etc.) using Android TV `TvContract` EPG / Watch Next content provider, `MediaSessionManager` active session tracking, and notification listeners.
-  - **Dock-Linked Focused App Filtering**: The Continue Watching shelf now only displays content for the media app currently focused on the dock (YouTube no longer shows permanently by default when hovering over other apps).
-  - **Integrated Stremio & Nuvio Dock Popups**: Integrated Continue Watching popups directly above dock tiles for Stremio and Nuvio, complete with QR code sign-in, multi-profile switching, and instant local caching.
-  - **Fluid RenderNode Entrance & Exit Animation**: Smooth float-up and glide-down animations with zero GPU overdraw overhead (`hasOverlappingRendering = false`).
-  - **Instant App Switching (No Re-Animation)**: Switching between two apps that both have Continue Watching content swaps the row instantly without re-animating; the entrance animation only triggers when moving from an app without a shelf to one with a shelf, or when the shelf closes.
-  - **Home Button Stability**: Pressing Home on the remote preserves the Continue Watching row and dock without triggering unintended re-entrance animations.
-- **Settings Backup & Restore (`Settings → System / About / Quick & Home`)**:
-  - Full backup of launcher preferences, dock order, custom app names, custom icons, button remapping, and scene settings to `Download/tvos-launcher-settings.json`.
-  - Built-in directory picker to restore settings from internal storage or external USB drives with one click.
-- **Korean Language Localization (한국어)**:
-  - Added full Korean localization across all launcher screens, setup wizard, settings sidebar, debloat tools, dialogs, and button mapper (`I18n.java`).
-- **CleanYourTV & MiBluetooth Protection**:
-  - Marked `MiBluetooth` (`com.xiaomi.bluetooth`, `com.mi.bluetooth`, `com.xiaomi.mitv.bluetooth`, etc.) as a critical system service in Manual Debloat and completely prohibited disabling it to prevent remote control unpairing or Bluetooth connectivity issues on Xiaomi TVs and Mi Boxes.
-- **HY320 / Projector Volume Button Hold Fix (Mode 2 & Mode 1)**:
-  - Fixed an issue in Mode 2 where holding the volume button for slightly longer than usual would sometimes continue adjusting after release; added release debouncing, timeout watchdogs, and proper cancellation across both ADB On and ADB Off modes.
-- **Launcher Settings Performance & UI Refinements**:
-  - Opening Launcher Settings from Quick Settings or the Dock is now significantly faster: heavy synchronous system app scans (`CleanYourTv.getSystemLaunchersSummary`, `getDebloatStatusSummary`) are offloaded to background threads with placeholder loading (`…`).
-  - Pre-warmed cache and debounced sidebar rebuilds to ensure zero frame drops when scrolling through the settings sidebar.
-  - Fixed Settings header icons: updated them to true squircles matching the dock app icon aesthetic instead of appearing cropped on the top and bottom.
-- **HWUI & GPU Performance Optimization**:
-  - Added vector glyph caching (`LruCache`) to eliminate CPU rasterization and GPU texture uploads on focus transitions.
-  - Optimized `LiquidGlass` shaders (eliminated redundant matrix computations and full-screen offscreen layers).
-  - Removed unnecessary 3D shadow meshes and elevation translations on dock cards and menus.
-  - Validated via `dumpsys gfxinfo`: 99th percentile GPU frame times maintained under 14ms (well within the 16.6ms 60 FPS budget).
-- **Local ADB Auto-Update Fix**:
-  - Fixed an issue where in-app auto-update via Local ADB was inadvertently blocked when the launcher's default ADB mode was active (`ADB_MODE_SECURE_CLOSE`).
-  - Added `chmod 644` to the staged update APK in `/data/local/tmp` so Android's `system_server` (UID 1000) can parse and install the APK without permission denial across Android 8 through Android 14.
-  - Fully detached `stdin`, `stdout`, and `stderr` on the background `pm install` execution, added `-g` for automatic permission granting, and added user feedback if an ADB install fails before falling back to the package installer.
-
----
-
-## 🆕 What Was New in `v2.1.0` (Changes Since `v2.0.5`)
-
-- **Dual-Mode ADB Security Architecture & One-Tap ADB Toggle (`Settings → Advanced` & First-Time Setup)**:
-  - **Secure Mode (Grant Once & Close ADB — Default & Recommended)**: Grants `WRITE_SECURE_SETTINGS` and `DUMP` once during setup and immediately closes network ADB (`adb_enabled = 0`) so port `5555` is never left open on your LAN. When Secure Mode is selected, the launcher strictly never connects to or probes ADB port `5555` in the background (even if ADB is enabled on the TV), repairing Accessibility (`ServiceRepair`) and running the **Volume Button Hold Fix** 100% in-process.
-  - **Persistent ADB Mode (Opt-In with Confirmation Popup)**: Optional mode for users who want network ADB kept open for runtime ADB tools like CleanYourTV. Selecting Persistent Mode while ADB is off prompts to enable USB Debugging and switch automatically; turning ADB off automatically returns to Secure Mode.
-  - **One-Tap Turn On / Turn Off ADB Button**: Toggle USB Debugging (`adb_enabled`) on or off directly from `Settings → Advanced` without enabling Wireless Debugging (`adb_wifi_enabled`).
-  - **Device Admin Removed & Keep Alive Enabled by Default**: Completely removed `BIND_DEVICE_ADMIN` (screen-off uses Android 9+ `GLOBAL_ACTION_LOCK_SCREEN`) so the launcher never blocks uninstallation, while keeping **Keep Alive** enabled by default (powered by `WRITE_SECURE_SETTINGS` in Secure Mode without touching ADB, or Local ADB in Persistent Mode).
-- **Refined First-Time Setup Wizard & Dedicated Default Home Troubleshooting Screen**:
-  - **Clear Usage Mode Selection**: Presented the permission setup options clearly as **Usage Modes** (*Mode: Secure Auto Setup & Close ADB*, *Mode: Persistent ADB Setup*, and *Mode: Manual Setup*).
-  - **Dedicated "Make tvOS Launcher Default Home" Setup Page**: Moved default home configuration to its own dedicated setup step right after permissions, with sequential **Step 1 – Step 4** troubleshooting options and a **Continue** button (running Step 1 stays on the page so you can proceed to Step 2 or Step 3).
-  - **Smart ADB Prompt for Secure Mode Users**: If you selected Secure ADB Mode and tap an ADB-requiring troubleshooting step (such as *Step 2: Disable System Launchers*), a friendly dialog explains that ADB is needed for that step and lets you either **Enable ADB Now** or **Skip This Step** (noting you can change ADB mode in Settings anytime).
-- **Universal Volume Button Hold Fix (`Mode 1` & `Mode 2` in `Settings → Button Mapper`)**:
-  - Works seamlessly in **both Secure Mode (ADB Off) and Persistent ADB Mode** with two selectable engines:
-    - **Mode 1 (Standard — Default)**: Uses `AudioService` + `InputManagerService` (`InputReader` hardware `KeyDowns` state via `DUMP` permission) in Secure Mode and `getevent` in Persistent ADB Mode for smooth volume hold repeat (`320ms` initial delay, `85ms` repeat) and instant key-release stopping (`<= 45ms`) on Android 9–14 Smart TVs without runaway volume.
-    - **Mode 2 (HY320 / Projector)**: Enhanced `AudioService` Binder dump watcher (`280ms` repeat delay + IR pulse-burst handling) tailored for Magcubic HY320 and Android 9–12 projectors.
-- **Built-In Lock Screen & Idle Timer (`Settings → Control Panel → Ambient Mode`)**:
-  - Choose between **Ambient Mode (System Default)** or the new **Built-In Lock Screen** when opening Ambient Mode or after an automatic **Idle Timer (`Off / 5 / 10 / 15 / 30 / 60 min`)**.
-  - Includes a dedicated **Lock Screen Settings** sub-menu to pick any **Night Scene, Classic Wallpaper, Custom 1–5, or Folder Shuffle**, configure **Clock Position (`Left / Center / Right`)**, and display the glass clock, date, greeting, and live weather over the wallpaper (pressing any key returns immediately).
-- **Wallpaper Folder Shuffle (`Settings → Appearance & Scenes` & `Lock Screen`)**:
-  - Pick any folder on internal storage or a USB drive (**Folder Shuffle**) to randomly cycle through unlimited desktop or lock screen background images instead of being limited to 5 static custom slots.
-- **Night Scenes Weather Shortcut Button (`Settings → Apps`)**:
-  - Added a glass **Weather Icon Shortcut** next to the Control Panel button in the top-right corner of Night Scenes Home that opens the 5-day weather forecast modal on tap (enabled by default, toggleable in `Settings → Apps → Home screen weather shortcut`).
-- **Customizable Control Panel Tiles (`Settings → Control Panel`)**:
-  - Toggle individual Control Panel buttons (**Wi-Fi, Bluetooth, RAM, Do Not Disturb, Audio, Sleep Timer, Ambient Mode, Power, Inputs, Button Mapper, Settings, Search**) on or off (all enabled by default).
-- **Send Key Code in Button Mapper (`Settings → Button Mapper`)**:
-  - Assign any mapped button (`1x / 2x / 3x` tap) to **Send Key Code** (Media Play/Pause, Next, Previous, Mute, Volume Up/Down, Back, Home, Menu, TV Input, Channel Up/Down, Captions, Guide, Info, or any custom Android `KeyEvent` code) without needing third-party apps like tvQuickActions.
-- **Interactive Update Available Popup & Dual-Mode APK Installer (`Settings → Updates`)**:
-  - When a new version is found (automatically or manually), displays an **Update Available** popup with **2 buttons**: **Show Changelog** (fetches and displays the GitHub Release notes directly on your TV) and **Install** (focused/selected by default).
-  - **Dual-Mode APK Installation**: In Persistent ADB Mode (`5555` open), updates install automatically in the background via a crash-safe detached Local ADB installer; in Secure Mode, it launches the Android system Package Installer for a clean update.
-- **Boot Speed, Compatibility & Continue Watching Fixes**:
-  - **Faster Boot Auto-Launch**: `PowerService` triggers the boot home launch immediately upon Accessibility Service connection (before `BOOT_COMPLETED` broadcast delays) and intercepts stock launcher windows during startup.
-  - **Philips Live TV Fix**: Removed `org.droidtv.playtv` from `KNOWN_SYSTEM_LAUNCHERS` so the Philips TV tuner activity is never treated as a system launcher.
-  - **Android 9 Revoke Permissions Fix & Instant Permission Counter**: Fixed a crash when revoking permissions on Android 9 TVs and updated the `Settings → Advanced` permission counter (`4 / 4 active`) to refresh immediately after repair.
-  - **Continue Watching Deep Links & No Demo Content**: Removed all demo/placeholder Continue Watching items (the row is completely hidden when no real media is available) and added full `Intent.parseUri` / `vnd.youtube` deep-link handling so clicking a YouTube video opens the exact video directly.
-
----
-
-## 🆕 What Was New in `v2.0.5`
-
-- **Resizable Night Scenes Dock (`50%` – `150%`) & Smart Multi-Row Overflow**: Scale the Night Scenes dock from `50%` to `150%` (`100%` default) at the top of *Appearance and scenes*. If a larger dock size leaves room for fewer icons on the main row, overflow apps automatically move into the **Other apps (`...`)** folder, which expands into a multi-row dock with full **DPAD Up / Down / Left / Right** navigation and auto-hides when empty.
-- **Refined Apple tvOS Classic Dock & Symmetrical Focus**: Updated Classic mode dock and app cards with authentic Apple tvOS squircle corner roundness, slightly larger app tiles, symmetrical edge spacing when the first or last dock app is focused, and smooth vertical scroll animations.
-- **Native Right-Pane Sub-Menus in Settings**: CleanYourTV, Manual Debloat, Disable System Launchers, and all sub-screens now open natively inside the right-hand Settings pane instead of modal popup dialogs, with background pre-caching for instant opening of the 341 TV model list and system app browser.
-- **One-Tap Stock Launcher Disabler & Manual System App Debloater**: Added **Disable system launchers** (automatically detects installed stock launchers like *Google TV Home / LauncherX, Android TV Home / Leanback, TCL, Philips, Xiaomi, Sony* to disable/enable in one tap) and **Manual debloat (All system apps)** with a safety confirmation and instant search.
-- **Improved OEM Compatibility (TCL, Philips, Xiaomi & Android 11–14)**:
-  - **Android 13/14 Restricted Settings Unlock**: Local ADB permission grant/repair now automatically sets `appops ACCESS_RESTRICTED_SETTINGS allow` so the Accessibility Service is never blocked on Android 13/14 TVs.
-  - **Fix Home Button (`Settings → Button mapper`)**: Optional Accessibility-powered Home key interception (off by default) for TCL/Philips TVs that ignore the standard Android default home setting.
-  - **Launch Automatically on Boot (`Settings → Advanced`)**: Optional boot-completed auto-launch toggle (off by default).
-  - **Revoke All Permissions / Device Admin (`Settings → Advanced`)**: One-tap option to remove Device Admin and revoke special permissions so the app can be cleanly uninstalled on TVs that lack a system Device Admin UI.
-  - **Crash-Safe ADB Repair & Key Handling**: Prevented black-screen loops during ADB permission repair, hardened `PowerService.onKeyEvent` so remote keys are never locked, renamed *Quick buttons* to **Quick settings** across all 13 languages, and set **Button sounds** to **Off** by default.
-
----
-
-## ✨ Highlights & Features
-
-- **Dual Appearance Modes (`Night Scenes` & `Classic`) + Custom Wallpapers**
-  - **Night Scenes**: Layered foreground/background depth scenes (*Night*, *Golden Hour*, *Waterline*, *Fog*, *Rainforest Dawn*, plus up to **5 Custom Wallpapers** with configurable **Clock Position: Left / Center / Right**) with a giant glass clock (*iPhone Duo*, *iPhone Rounded*, *Tall Glass*), personalized greeting, date, live weather, and a macOS-inspired dynamically resizing **Liquid Glass Dock (`50%` to `150%`)** with floating app name callouts.
-  - **App Icon Changer & Interactive Icon Editor (`JPG / PNG / ICO`)**:
-    - Hold **OK** on any app in the dock or grid and choose **Change app icon** to pick any `.jpg`, `.jpeg`, `.png`, or Windows `.ico` file from internal storage or USB drives.
-    - Includes a built-in **App Icon Editor** with a live rounded-square preview, **14 background color options** (including auto edge-color sampling), **Zoom In / Out**, and **Left / Right / Up / Down** positioning.
-  - **Custom App Renaming, Other Apps & Hidden Apps Vault**:
-    - Hold **OK** on any app in the dock to **Rename**, **Change app icon**, **Move**, **Move to Other Apps**, **Hide**, view **App Info**, **Uninstall**, or **Reset Layout**.
-    - **Move to Other Apps**: Removes the app from the first dock row while keeping it one click away inside the **Other apps (`...`)** button in the dock (auto-hidden when empty, with multi-row Up/Down navigation when expanded).
-    - **Hidden Apps (`Settings → Apps → Hidden apps`)**: Completely hides the app from both the main dock and Other Apps. Inside **Settings → Apps → Hidden apps**, press **OK** on a hidden app to launch it directly, or **Hold OK** to restore it back to the Home Screen.
-  - **Classic**: Clean 6-column app banner grid with an Apple tvOS–styled centered glass dock, larger squircle app cards, symmetrical edge spacing, smooth row animations, built-in photography, ambient color backdrops, or your own **Custom Wallpaper**, and an optional Top Shelf.
-- **Automatic & Manual GitHub Updates (`Settings → Updates`)**
-  - Built-in updater right above the About menu that checks GitHub Releases for new versions, shows current vs. latest release info, supports one-tap **Check for updates**, and includes an **Automatic updates** toggle.
-- **CleanYourTV (Beta) — Built-In PC-Free Android TV Debloater (`Settings → Advanced`)**
-  - Runs **[CleanYourTV](https://github.com/Gathin23/cleanyourtv)** debloat profiles directly on your TV over Local ADB (`127.0.0.1:5555`) inside native right-side Settings menus — **no PC or external CLI required**.
-  - **341 Bundled TV & Box Profiles**: Covers *TCL, Sony, Xiaomi, Hisense, Philips, Skyworth, OnePlus, Realme, Nvidia Shield, Motorola, Toshiba, Sharp, Onn, Chromecast with Google TV*, and more.
-  - **Smart OEM Model Detection & ADB Package Similarity Scanner**: Automatically detects exact or similar models from your TV's hardware properties, lets you search all 341 profiles instantaneously, or scans your TV's installed OEM/vendor system apps via ADB with weighted scoring to rank the closest matching TV models.
-  - **One-Tap Stock Launcher Disabler & Manual Debloater**: Includes a dedicated **Disable system launchers** menu for *Google TV Home, Android TV Home*, and OEM launchers, plus a **Manual debloat** browser for all installed system packages.
-  - **Interactive Debloat Checklist**: Pre-selects telemetry, ad rows, and bloatware while keeping optional apps (*Google Assistant, YouTube Music, Play Games, TalkBack, Chromecast receiver, Remote Service*) unselected at the bottom of the list so you decide what stays.
-  - **Google TV `setupwraith` Wi-Fi Guard**: Warns Google TV users about forgetting and re-adding Wi-Fi before disabling `setupwraith` / `launcherx` (or lets you safely skip `setupwraith` with one tap).
-  - **One-Tap Backup, Restore & AdGuard DNS**: Tracks disabled packages, shows live **Debloat Status** (`Done` / `Not done`), restores disabled apps anytime with one tap, and includes an **Ad-blocking Private DNS (`dns.adguard-dns.com`)** toggle.
-- **Universal Glass Control Panel (`Quick Settings`) Overlay**
-  - Accessible from the home screen or over **any running app** via the Button Mapper accessibility service with real-time background blur (`RenderEffect` on Android 12+ with high-speed box-blur fallback).
-  - Includes **Wi-Fi**, **Bluetooth**, **RAM / Recent Apps**, **Do Not Disturb**, **Audio / Sound**, **Sleep Timer**, **Ambient Mode**, **Power / Screen Off**, **Inputs**, **Button Mapper**, **Settings**, and **Search**.
-  - **Universal Brand Activity Picker**: From **Settings → Control Panel**, choose any installed system app and specific activity to launch when tapping **Wi-Fi**, **Bluetooth**, **Sound**, or **Inputs** (synced with the **Inputs** app on the dock).
-  - **Built-In Ambient Mode Fallback**: Launches your TV's native Google Ambient Mode / screensaver if installed, or automatically falls back to a built-in full-screen ambient showcase.
-- **Recent Apps Switcher Overlay & RAM Cleaner**
-  - Open from any app via a mapped remote button or by tapping the **RAM** tile in the Control Panel.
-  - Displays live memory usage (`RAM used / total`), horizontal app cards, **DPAD UP** to force-stop/dismiss individual apps, and a **Close All** button.
-- **Multi-Tap Remote Button Mapper (`1x` / `2x` / `3x` Tap), Home Button Fix & Volume Hold Fix**
-  - Built-in crash-safe Accessibility Service that intercepts any remote button you choose and lets you assign independent actions for **Single Tap (1x)**, **Double Tap (2x)**, and **Triple Tap (3x)** — open the Control Panel on `1x`, Recent Apps Switcher on `2x`, or launch any installed app on `3x`.
-  - **Fix Home Button (Off by default)**: Optional toggle to remap the remote's Home key directly to tvOS Launcher on TVs (such as TCL and Philips Android 11/12) where the firmware overrides the default launcher role.
-  - **Long-Press Volume Button Fix (On by default)**: Ensures holding Volume Up/Down smoothly repeats volume steps on TVs where enabling Accessibility services normally blocks key-repeat on volume buttons.
-- **Easy Setup via Local ADB, Keep Alive Auto-Repair & One-Tap Permission Revoke**
-  - **Easy Setup (Auto via Local ADB)** connects to `127.0.0.1:5555` to automatically unlock `ACCESS_RESTRICTED_SETTINGS` (Android 13/14+) and grant Default Home, Accessibility Service, Device Admin, Notification Listener, Usage Stats, `WRITE_SECURE_SETTINGS`, and Background Activity Launch permissions in one click.
-  - **Keep Alive (On by default)**: Lightly monitors permission status in the background with zero extra RAM/CPU load and automatically restores Accessibility or other permissions via Local ADB if the TV firmware disables them.
-  - **Revoke All Permissions (`Settings → Advanced`)**: Removes Device Admin and revokes special permissions in one tap for easy uninstallation on any TV.
-- **13 Supported Languages**
-  - Fully localized UI across **English, Turkish, Swedish, Hindi, Spanish, French, German, Italian, Russian, Portuguese, Arabic, Japanese, and Chinese**.
-- **Multi-User Profiles & Live Weather**
-  - Up to 3 profiles, each with its own app order, hidden apps, and Continue Watching list.
-  - Free 5-day weather forecast via Open-Meteo, MET Norway, or wttr.in (no API key required).
-- **Ultra-Lightweight, Fast & Legacy Android TV Ready (Android 7.0 – Android 14+)**
-  - Pure Android SDK Java — no Gradle, no Kotlin runtime, no AndroidX bloat. Instant zoom-in app launches, hardware-accelerated focus animations, and full compatibility from Android 7.0 / 8.0 up to Android 14 TV firmwares.
-
----
-
-## 📸 Screenshots
-
-### Home Screen, Control Panel & Recent Apps Switcher
-
-| Night Scenes Home & macOS Glass Dock | Glass Control Panel Overlay |
-| :---: | :---: |
-| ![Home Screen](screenshots_en/Home.png) | ![Control Panel](screenshots_en/controlpanel.png) |
-
-| Recent Apps Switcher & RAM Cleaner |
-| :---: |
-| ![Recent Apps Switcher](screenshots_en/Recent%20apps.png) |
-
----
-
-### First-Time Setup Assistant
-
-| 1. Welcome & Language Selection | 2. Profile & Avatar Setup |
-| :---: | :---: |
-| ![Welcome](screenshots_en/Welcome.png) | ![Profile Setup](screenshots_en/User.png) |
-
-| 3. Appearance Mode (`Night Scenes` / `Classic`) | 4. Weather & Location |
-| :---: | :---: |
-| ![Appearance Setup](screenshots_en/Apperance.png) | ![Weather Setup](screenshots_en/Weather.png) |
-
-| 5. Easy Setup (Auto ADB) vs. Manual Permissions | 6. Remote Button Mapper Setup (`1x / 2x / 3x`) |
-| :---: | :---: |
-| ![Complete Setup](screenshots_en/Setup.png) | ![Button Mapper Setup](screenshots_en/buttonmapper.png) |
-
----
-
-### Home Settings
-
-| Appearance & Scenes (`Dock Size 50%–150%`) | Control Panel (`Quick Settings`) |
-| :---: | :---: |
-| ![Settings - Appearance and Scenes](screenshots_en/Setting1.png) | ![Settings - Control Panel](screenshots_en/Setting2.png) |
-
-| Button Mapper (`1x / 2x / 3x Tap` & Home Button Fix) | Advanced, ADB Status & Permission Check (`5 / 5`) |
-| :---: | :---: |
-| ![Settings - Button Mapper](screenshots_en/Setting3.png) | ![Settings - Advanced & ADB](screenshots_en/Setting4.png) |
-
-| CleanYourTV — Disable System Launchers | Automatic & Manual GitHub Updates |
-| :---: | :---: |
-| ![Settings - Disable System Launchers](screenshots_en/Setting5.png) | ![Settings - Updates](screenshots_en/Setting6.png) |
-
----
-
-## 🚀 Quick Start (Build & Install)
-
-### Prerequisites
-- **JDK 17+** (`javac`, `jar`)
-- **Android SDK** with `build-tools;34.0.0` and `platforms;android-34`
-
-### Build on Windows (PowerShell)
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
-# Output APK -> build\tvos-home.apk
-```
-
-### Build on macOS / Linux
-```sh
-./build.sh
-# Output APK -> build/tvos-home.apk
-```
-
-### Install via ADB
-```sh
-adb connect <tv-ip>:5555
-adb install -r build/tvos-home.apk
-adb shell am start -n com.techgenius.tvoslauncher/.MainActivity
-```
-
----
-
-## 📚 Documentation
-
-| Document | Description |
+| Feature | Notes |
 |---|---|
-| **[Getting started](docs/getting-started.md)** | Install SDK tools, build from source, run on an Android TV or emulator |
-| **[Features](docs/features.md)** | Detailed breakdown of launcher features |
-| **[Install and set up](docs/install.md)** | Setting as default home screen, ADB permissions, and troubleshooting |
-| **[Presentation mode](docs/presentation.md)** | Sending images, videos, and web pages from a browser |
-| **[Architecture](docs/architecture.md)** | Code map, zero-dependency build pipeline, and performance design |
-| **[Contributing](CONTRIBUTING.md)** | Workflow, code style, design and performance guidelines |
+| **Phone remote (no app to install)** | The TV runs a small web server (port `8765`). Scan the QR code on the TV with the phone camera, same Wi-Fi. D-pad, OK, back/home, volume, play/pause, app shortcuts, a browser tab and a trackpad. |
+| **Home-screen widgets** | Analog clock and month calendar widgets that you place on the home screen (see the picture above). |
+| **Screensaver (DreamService)** | Looping muted video (`somine.mp4`) or, if no video is present, a procedural animated fireplace, with a large clock and date on top. |
+| **4K scenes** | Night Scenes are rendered on a 4K surface, with prefetching and a background loader. |
+| **Liquid-glass transition** | Smooth glass blend when moving between home and the control panel. |
+| **Home button recovery** | Takes the Home key back from the stock Google TV launcher, plus accessibility helpers. |
+| **YouTube seek then autoplay** | Skipping forward/back in YouTube resumes playback automatically. |
+| **Continue Watching on by default** | Upstream v2.1.2 feature, enabled out of the box here. |
+| **Auto-update dialog off** | The in-app updater no longer pops up; you can still check manually in Settings. |
 
----
+### Phone remote
 
-## 📋 Requirements
+| QR code on the TV | The remote on the phone |
+|---|---|
+| ![QR](docs/uhd/phone-remote-qr.jpg) | <img src="docs/uhd/phone-remote-app.png" width="260"> |
 
-- **Android TV / Google TV 7.0+ (API 24+)**
+### Wallpapers and widgets
 
----
+![Wallpapers with clock and calendar widgets](docs/uhd/wallpapers-widgets-1.jpg)
+![More wallpapers](docs/uhd/wallpapers-widgets-2.jpg)
+![Desert scene with the calendar widget](docs/uhd/home-desert-calendar.jpg)
 
-## 🙌 Credits & Acknowledgements
+## Screensaver
 
-Special thanks to the open-source projects that inspired and contributed to **tvOS Launcher**:
+Set the launcher as the system screensaver (Settings → Device preferences → Screen saver). It uses, in order:
 
-- **[Hume Launcher](https://github.com/petrobot-admin/hume-launcher)** by [@petrobot-admin](https://github.com/petrobot-admin) — Foundation for the zero-dependency Android TV Java architecture, Classic home layout, and system integrations.
-- **[Couch TV](https://github.com/Seagey/couch-tv)** by [@Seagey](https://github.com/Seagey) — Design and inspiration for the Night Scenes depth wallpapers, giant glass clock, and glassmorphic Home Settings UI.
-- **[CleanYourTV](https://github.com/Gathin23/cleanyourtv)** by [@Gathin23](https://github.com/Gathin23) — Community-curated Android TV / Google TV debloat profiles (`examples/`) and safety guidelines powering the built-in CleanYourTV (Beta) debloater.
-- **Inter Typeface** (SIL Open Font License 1.1) & **Project Nayuki QR Code Generator** (MIT License).
-- Weather data powered by **Open-Meteo**, **MET Norway**, and **wttr.in**.
+1. `somine.mp4` in the app's external files folder, played muted in a loop and center-cropped to fill the screen.
+2. Otherwise a built-in procedural fireplace (no download needed).
 
----
+Put your own video on the TV (it is **not** shipped in this repo; Pexels videos are free to use under the
+[Pexels license](https://www.pexels.com/license/)):
 
-## 📄 License
+```bash
+adb push fireplace.mp4 /sdcard/Android/data/<your.package>/files/somine.mp4
+```
 
-Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
+A 1080p H.264 file is the safe choice on low-RAM TVs. To use the old wallpaper-shuffle screensaver instead, set the
+`screensaver_style` preference (file `screensaver`) to `scenes`.
+
+## Build
+
+JDK 17+, Android SDK build-tools 34.0.0 and platform android-34. No Gradle.
+
+```bash
+./build.sh                                   # -> build/tvos-home.apk (debug-signed)
+VERSION_CODE=150 VERSION_NAME=2.1.2-uhd8 PKG=com.example.tvoslauncher ./build.sh
+```
+
+`PKG` renames the application id so the build installs next to (or instead of) another build. Updates keep data as
+long as the id and signing key stay the same, and `VERSION_CODE` must go up on every build.
+
+## Credits and license
+
+Apache-2.0, same as upstream; see [LICENSE](LICENSE) and [NOTICE](NOTICE). All credit for the launcher itself goes to
+[techgenius](https://github.com/techgenius1/tvOS-Launcher) and the projects listed in `NOTICE`. This fork only adds
+the features in the table above. Not affiliated with Apple; "tvOS" is a trademark of Apple Inc.
