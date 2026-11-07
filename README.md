@@ -22,6 +22,7 @@ Android TV screensaver, fireplace screensaver, phone remote control, TV widgets,
 | **TV panel on the phone** | Memory and storage at a glance, free memory, sleep timer, screensaver settings and video upload, all in the phone remote (gear → TV Paneli). |
 | **Screensaver (DreamService)** | Muted videos in random order or, if there are none, a procedural animated fireplace, with a large clock and date on top. The clock drifts slowly to protect the panel, and the picture dims after midnight. |
 | **Edit Home Screen** | A Control Center tile opens a remote-driven editor over the home screen: clock size, weight (down to extra thin), style, position, solid/glass look and opacity; calendar and analog clock widgets on/off, size and position; top-right button size; Continue Watching on/off, content and vertical position (with an outline while you move it). |
+| **Remote on the phone's home screen** | The phone remote page has a web app manifest and icon: in Chrome choose "Add to Home screen" to get a "Kumanda" icon. The token stays in the phone's browser storage, the manifest holds none. (Plain HTTP on the home network, so Android adds it as a shortcut rather than a fully installed app.) |
 | **Next wallpaper button** | A round button in the top-right corner skips to the next wallpaper right away. |
 | **Wallpaper upload from the phone** | TV Paneli → Duvar kâğıdı yükle saves pictures (jpg, png, webp) to `Pictures/Kumandadan` on the TV, creating the folder if needed. |
 | **Smooth return to Home** | Coming back from an app shows the wallpaper, its shade and the clock at once (no black frame, no clock jump). The clock lives in a normal view above the wallpaper surface. |
@@ -102,7 +103,7 @@ JDK 17+, Android SDK build-tools 34.0.0 and platform android-34. No Gradle.
 
 ```bash
 ./build.sh                                   # -> build/tvos-home.apk (debug-signed)
-VERSION_CODE=177 VERSION_NAME=2.1.2-uhd35 PKG=com.example.tvoslauncher ./build.sh
+VERSION_CODE=178 VERSION_NAME=2.1.2-uhd36 PKG=com.example.tvoslauncher ./build.sh
 ```
 
 `PKG` renames the application id so the build installs next to (or instead of) another build. Updates keep data as

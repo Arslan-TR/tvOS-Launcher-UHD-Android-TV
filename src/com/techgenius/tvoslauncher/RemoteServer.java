@@ -178,6 +178,12 @@ final class RemoteServer {
             if (path.equals("/") || path.equals("/index.html")) {
                 // The page itself is harmless; the API below needs the token.
                 write(out, 200, "text/html; charset=utf-8", asset("remote.html"));
+            } else if (path.equals("/manifest.webmanifest")) {
+                // Lets the phone add the remote to its home screen with its own name and icon. No token in it:
+                // the page keeps the token in the phone's browser storage.
+                write(out, 200, "application/manifest+json", WEB_MANIFEST.getBytes(StandardCharsets.UTF_8), "max-age=86400");
+            } else if (path.equals("/icon-192.png") || path.equals("/icon-512.png")) {
+                write(out, 200, "image/png", remoteIcon(path.contains("512") ? 512 : 192), "max-age=86400");
             } else if (!authed) {
                 write(out, 403, "application/json", "{\"ok\":false,\"err\":\"token\"}".getBytes(StandardCharsets.UTF_8));
             } else if (path.equals("/api/ping")) {
@@ -1247,6 +1253,35 @@ final class RemoteServer {
 
     private static void json(OutputStream out, String body) throws Exception {
         write(out, 200, "application/json; charset=utf-8", body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static final String WEB_MANIFEST = "{\"name\":\"TV Kumanda\",\"short_name\":\"Kumanda\","
+            + "\"start_url\":\"/\",\"scope\":\"/\",\"display\":\"standalone\",\"orientation\":\"portrait\","
+            + "\"background_color\":\"#05070c\",\"theme_color\":\"#05070c\",\"icons\":["
+            + "{\"src\":\"/icon-192.png\",\"sizes\":\"192x192\",\"type\":\"image/png\",\"purpose\":\"any maskable\"},"
+            + "{\"src\":\"/icon-512.png\",\"sizes\":\"512x512\",\"type\":\"image/png\",\"purpose\":\"any maskable\"}]}";
+
+    private final java.util.Map<Integer, byte[]> homeIconPng = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Home-screen icon for the phone: the launcher's remote glyph on a dark rounded square. */
+    private byte[] remoteIcon(int size) {
+        byte[] cached = homeIconPng.get(size);
+        if (cached != null) return cached;
+        android.graphics.Bitmap b = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas c = new android.graphics.Canvas(b);
+        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        p.setShader(new android.graphics.LinearGradient(0, 0, 0, size, 0xFF1C2233, 0xFF05070C,
+                android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, size, size, p);   // full bleed: "maskable" icons are cut to the phone's own shape
+        int g = Math.round(size * 0.5f);
+        android.graphics.Bitmap glyph = Glyphs.get("remote", g, 0xFFF4F5F8);
+        if (glyph != null) c.drawBitmap(glyph, (size - glyph.getWidth()) / 2f, (size - glyph.getHeight()) / 2f, null);
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        b.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bo);
+        b.recycle();
+        byte[] png = bo.toByteArray();
+        homeIconPng.put(size, png);
+        return png;
     }
 
     private static void write(OutputStream out, int code, String type, byte[] body, String cache) throws Exception {
