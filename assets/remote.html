@@ -948,6 +948,7 @@ $('nb_ip').onclick=()=>{const t=document.createElement('textarea');t.value=locat
 (function(){
   const FLAG='chrome://flags/#unsafely-treat-insecure-origin-as-secure';
   const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+  if('serviceWorker' in navigator&&window.isSecureContext){navigator.serviceWorker.register('/sw.js').catch(()=>{})}
   if(standalone)return;
   $('pwa').style.display='block';
   const copy=(v,msg)=>{const t=document.createElement('textarea');t.value=v;document.body.appendChild(t);t.select();

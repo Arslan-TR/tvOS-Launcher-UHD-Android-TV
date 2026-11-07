@@ -182,6 +182,9 @@ final class RemoteServer {
                 // Lets the phone add the remote to its home screen with its own name and icon. No token in it:
                 // the page keeps the token in the phone's browser storage.
                 write(out, 200, "application/manifest+json", WEB_MANIFEST.getBytes(StandardCharsets.UTF_8), "max-age=86400");
+            } else if (path.equals("/sw.js")) {
+                // Chrome on Android installs a web app only with a service worker that handles fetches.
+                write(out, 200, "text/javascript; charset=utf-8", SERVICE_WORKER.getBytes(StandardCharsets.UTF_8), "no-cache");
             } else if (path.equals("/icon-192.png") || path.equals("/icon-512.png")) {
                 write(out, 200, "image/png", remoteIcon(path.contains("512") ? 512 : 192), "max-age=86400");
             } else if (!authed) {
@@ -1258,8 +1261,14 @@ final class RemoteServer {
     private static final String WEB_MANIFEST = "{\"name\":\"TV Kumanda\",\"short_name\":\"Kumanda\","
             + "\"start_url\":\"/\",\"scope\":\"/\",\"display\":\"standalone\",\"orientation\":\"portrait\","
             + "\"background_color\":\"#05070c\",\"theme_color\":\"#05070c\",\"icons\":["
-            + "{\"src\":\"/icon-192.png\",\"sizes\":\"192x192\",\"type\":\"image/png\",\"purpose\":\"any maskable\"},"
-            + "{\"src\":\"/icon-512.png\",\"sizes\":\"512x512\",\"type\":\"image/png\",\"purpose\":\"any maskable\"}]}";
+            + "{\"src\":\"/icon-192.png\",\"sizes\":\"192x192\",\"type\":\"image/png\",\"purpose\":\"any\"},"
+            + "{\"src\":\"/icon-512.png\",\"sizes\":\"512x512\",\"type\":\"image/png\",\"purpose\":\"any\"},"
+            + "{\"src\":\"/icon-512.png\",\"sizes\":\"512x512\",\"type\":\"image/png\",\"purpose\":\"maskable\"}]}";
+
+    /** Passes every request to the network (the remote only works on the home network anyway). */
+    private static final String SERVICE_WORKER = "self.addEventListener('install',function(){self.skipWaiting();});"
+            + "self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim());});"
+            + "self.addEventListener('fetch',function(e){e.respondWith(fetch(e.request));});";
 
     private final java.util.Map<Integer, byte[]> homeIconPng = new java.util.concurrent.ConcurrentHashMap<>();
 
