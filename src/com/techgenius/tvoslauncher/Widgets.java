@@ -83,10 +83,10 @@ final class Widgets {
     static Cfg clamp(Cfg v) {
         Cfg r = new Cfg();
         r.visible = v.visible;
-        r.scale = Math.max(0.5f, Math.min(2.4f, v.scale));
+        r.scale = Math.max(0.5f, Math.min(2.4f, Float.isNaN(v.scale) ? 1f : v.scale));
         float fw = BASE_DP * r.scale / SCREEN_W_DP, fh = BASE_DP * r.scale / SCREEN_H_DP;
-        r.x = Math.max(0f, Math.min(1f - fw, v.x));
-        r.y = Math.max(0f, Math.min(1f - fh, v.y));
+        r.x = Math.max(0f, Math.min(1f - fw, Float.isNaN(v.x) ? 0f : v.x));
+        r.y = Math.max(0f, Math.min(1f - fh, Float.isNaN(v.y) ? 0f : v.y));
         return r;
     }
 
@@ -94,39 +94,82 @@ final class Widgets {
         return c.getResources().getConfiguration().getLocales().get(0);
     }
 
-    /** Month grid, Monday first: month name in red, today in a red circle, weekend days grey. */
-    static final class CalendarView extends View {
-        private final Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF box = new RectF();
+    /** A view that wakes up on a timer only while it can be seen, so nothing ticks behind YouTube. */
+    private abstract static class TickingView extends View {
         private final Handler handler = new Handler(Looper.getMainLooper());
         private final Runnable tick = new Runnable() {
             @Override
             public void run() {
-                invalidate();
-                handler.postDelayed(this, 60_000L);
+                onTick();
+                handler.postDelayed(this, nextDelayMs());
             }
         };
 
-        CalendarView(Context c) {
+        TickingView(Context c) {
             super(c);
-            bg.setColor(0xFFFFFFFF);
-            text.setTextAlign(Paint.Align.CENTER);
-            dot.setColor(0xFFEF4F4F);
             setFocusable(false);
+        }
+
+        abstract void onTick();
+
+        abstract long nextDelayMs();
+
+        private void update() {
+            handler.removeCallbacks(tick);
+            if (isAttachedToWindow() && getVisibility() == VISIBLE && getWindowVisibility() == VISIBLE) handler.post(tick);
         }
 
         @Override
         protected void onAttachedToWindow() {
             super.onAttachedToWindow();
-            handler.post(tick);
+            update();
         }
 
         @Override
         protected void onDetachedFromWindow() {
             handler.removeCallbacks(tick);
             super.onDetachedFromWindow();
+        }
+
+        @Override
+        protected void onWindowVisibilityChanged(int visibility) {
+            super.onWindowVisibilityChanged(visibility);
+            update();
+        }
+
+        @Override
+        protected void onVisibilityChanged(View changed, int visibility) {
+            super.onVisibilityChanged(changed, visibility);
+            if (changed == this) update();
+        }
+    }
+
+    /** Month grid, Monday first: month name in red, today in a red circle, weekend days grey. */
+    static final class CalendarView extends TickingView {
+        private final Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF box = new RectF();
+        private final Typeface semi = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+        private final Typeface bold = Typeface.create(Typeface.DEFAULT, Typeface.BOLD);
+        private int drawnDay = -1;
+
+        CalendarView(Context c) {
+            super(c);
+            bg.setColor(0xFFFFFFFF);
+            text.setTextAlign(Paint.Align.CENTER);
+            dot.setColor(0xFFEF4F4F);
+        }
+
+        @Override
+        void onTick() {
+            // Only the date matters here: redraw when it changes, not every minute.
+            if (Calendar.getInstance().get(Calendar.DAY_OF_YEAR) != drawnDay) invalidate();
+        }
+
+        @Override
+        long nextDelayMs() {
+            return 60_000L;
         }
 
         @Override
@@ -138,6 +181,7 @@ final class Widgets {
 
             Locale loc = locale(getContext());
             Calendar now = Calendar.getInstance();
+            drawnDay = now.get(Calendar.DAY_OF_YEAR);
             int today = now.get(Calendar.DAY_OF_MONTH);
             Calendar first = (Calendar) now.clone();
             first.set(Calendar.DAY_OF_MONTH, 1);
@@ -146,7 +190,6 @@ final class Widgets {
 
             float padX = w * 0.073f;
             float cell = (w - 2 * padX) / 7f;
-            Typeface semi = Typeface.create("sans-serif-medium", Typeface.NORMAL);
 
             // Month name
             text.setTextAlign(Paint.Align.LEFT);
@@ -159,7 +202,7 @@ final class Widgets {
             // Weekday letters (Monday first)
             text.setTextAlign(Paint.Align.CENTER);
             text.setTextSize(w * 0.062f);
-            text.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            text.setTypeface(bold);
             Calendar d = Calendar.getInstance();
             d.set(2024, Calendar.JANUARY, 1);  // a Monday
             SimpleDateFormat wd = new SimpleDateFormat("EEE", loc);
@@ -183,7 +226,7 @@ final class Widgets {
                 if (day == today) {
                     cv.drawCircle(cx, cy - w * 0.024f, w * 0.052f, dot);
                     text.setColor(0xFFFFFFFF);
-                    text.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+                    text.setTypeface(bold);
                 } else {
                     text.setColor(col >= 5 ? 0xFF9B9BA1 : 0xFF111114);
                     text.setTypeface(semi);
@@ -194,19 +237,13 @@ final class Widgets {
     }
 
     /** White square analog clock: ticks run to the edge, 12/3/6/9, orange second hand. */
-    static final class ClockView extends View {
+    static final class ClockView extends TickingView {
         private final Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint num = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint hub = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF box = new RectF();
-        private final Handler handler = new Handler(Looper.getMainLooper());
-        private final Runnable tick = new Runnable() {
-            @Override
-            public void run() {
-                invalidate();
-                handler.postDelayed(this, 1000L - (System.currentTimeMillis() % 1000L));
-            }
-        };
+        private final float[] hourTicks = new float[12 * 4], minuteTicks = new float[48 * 4];
 
         ClockView(Context c) {
             super(c);
@@ -215,32 +252,25 @@ final class Widgets {
             num.setTextAlign(Paint.Align.CENTER);
             num.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
             num.setColor(0xFF1C1C1E);
-            setFocusable(false);
         }
 
         @Override
-        protected void onAttachedToWindow() {
-            super.onAttachedToWindow();
-            handler.post(tick);
+        void onTick() {
+            invalidate();
         }
 
         @Override
-        protected void onDetachedFromWindow() {
-            handler.removeCallbacks(tick);
-            super.onDetachedFromWindow();
+        long nextDelayMs() {
+            return 1000L - (System.currentTimeMillis() % 1000L);
         }
 
+        /** Ticks follow the widget's rounded-square outline (superellipse); computed once per size. */
         @Override
-        protected void onDraw(Canvas cv) {
-            float w = getWidth(), h = getHeight();
-            if (w <= 0) return;
-            box.set(0, 0, w, h);
-            cv.drawRoundRect(box, w * 0.24f, w * 0.24f, bg);
-            float cx = w / 2f, cy = h / 2f, half = w / 2f;
-
-            // Ticks follow the widget's rounded-square outline (superellipse); black hour ticks at all
-            // twelve positions, short bold-grey minute ticks between them.
+        protected void onSizeChanged(int nw, int nh, int ow, int oh) {
+            super.onSizeChanged(nw, nh, ow, oh);
+            float w = nw, cx = nw / 2f, cy = nh / 2f, half = nw / 2f;
             final double n = 5.0;
+            int hi = 0, mi = 0;
             for (int m = 0; m < 60; m++) {
                 boolean hour = m % 5 == 0;
                 double a = Math.toRadians(m * 6);
@@ -250,20 +280,39 @@ final class Widgets {
                 float r1 = edge - w * 0.052f;
                 float grow = Math.max(0f, edge - half);  // longer toward the corners, like the real widget
                 float r0 = r1 - (hour ? w * 0.085f + grow * 0.55f : w * 0.044f + grow * 0.06f);
-                line.setStrokeWidth(hour ? w * 0.0075f : w * 0.0095f);
-                line.setColor(hour ? 0xFF1C1C1E : 0xFFB5B5BA);
-                cv.drawLine(cx + dx * r0, cy + dy * r0, cx + dx * r1, cy + dy * r1, line);
+                float[] out = hour ? hourTicks : minuteTicks;
+                int i = hour ? hi : mi;
+                out[i] = cx + dx * r0;
+                out[i + 1] = cy + dy * r0;
+                out[i + 2] = cx + dx * r1;
+                out[i + 3] = cy + dy * r1;
+                if (hour) hi += 4; else mi += 4;
             }
+        }
+
+        @Override
+        protected void onDraw(Canvas cv) {
+            float w = getWidth(), h = getHeight();
+            if (w <= 0) return;
+            box.set(0, 0, w, h);
+            cv.drawRoundRect(box, w * 0.24f, w * 0.24f, bg);
+            float cx = w / 2f, cy = h / 2f;
+
+            line.setStrokeWidth(w * 0.0095f);
+            line.setColor(0xFFB5B5BA);
+            cv.drawLines(minuteTicks, line);
+            line.setStrokeWidth(w * 0.0075f);
+            line.setColor(0xFF1C1C1E);
+            cv.drawLines(hourTicks, line);
 
             num.setTextSize(w * 0.148f);
             float off = num.descent() - (num.descent() - num.ascent()) / 2f;
-            cv.drawText("12", cx - w * 0.0f, w * 0.24f - off, num);
+            cv.drawText("12", cx, w * 0.24f - off, num);
             cv.drawText("6", cx, h - w * 0.22f - off, num);
             cv.drawText("9", w * 0.222f, cy - off, num);
             cv.drawText("3", w - w * 0.222f, cy - off, num);
 
             Calendar c = Calendar.getInstance();
-            long ms = System.currentTimeMillis();
             float sec = c.get(Calendar.SECOND);
             float min = c.get(Calendar.MINUTE) + sec / 60f;
             float hr = (c.get(Calendar.HOUR) % 12) + min / 60f;
@@ -272,11 +321,10 @@ final class Widgets {
             dualHand(cv, cx, cy, min * 6f, w * 0.062f, w * 0.452f, w * 0.034f, w * 0.010f);
             hand(cv, cx, cy, sec * 6f, w * 0.44f, w * 0.006f, 0xFFF2A33A);
 
-            Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
-            ring.setColor(0xFFF2A33A);
-            cv.drawCircle(cx, cy, w * 0.026f, ring);
-            ring.setColor(0xFFFFFFFF);
-            cv.drawCircle(cx, cy, w * 0.0125f, ring);
+            hub.setColor(0xFFF2A33A);
+            cv.drawCircle(cx, cy, w * 0.026f, hub);
+            hub.setColor(0xFFFFFFFF);
+            cv.drawCircle(cx, cy, w * 0.0125f, hub);
         }
 
         /** Black hand as on the real widget: a thin stem from the hub, then a thick rounded blade. */

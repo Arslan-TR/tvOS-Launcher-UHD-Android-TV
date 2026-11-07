@@ -55,8 +55,6 @@ public final class CustomMedia {
     private static final String KEY_CLASSIC_WALL_TS = "classic_wall_ts";
 
     private static final Map<String, Bitmap> ICON_CACHE = new HashMap<>();
-    private static final Bitmap[] cachedSceneWalls = new Bitmap[6];
-    private static final long[] cachedSceneWallTs = {-1L, -1L, -1L, -1L, -1L, -1L};
     private static Bitmap cachedClassicWall;
     private static long cachedClassicWallTs = -1L;
 
@@ -73,9 +71,6 @@ public final class CustomMedia {
     public static final String SCOPE_SCENE = "scene";
     public static final String SCOPE_CLASSIC = "classic";
     public static final String SCOPE_LOCK = "lock";
-
-    private static Bitmap cachedLockWall;
-    private static long cachedLockWallTs = -1L;
 
     private static final Map<String, List<File>> folderDeckMap = new HashMap<>();
     private static final Map<String, Integer> folderIndexMap = new HashMap<>();
@@ -771,8 +766,6 @@ public final class CustomMedia {
             fos.flush();
             long ts = System.currentTimeMillis();
             prefs(c).edit().putLong(sceneWallTsKey(s), ts).apply();
-            cachedSceneWalls[s] = cropped;
-            cachedSceneWallTs[s] = ts;
             return true;
         } catch (Throwable t) {
             return false;
@@ -786,19 +779,13 @@ public final class CustomMedia {
     public static Bitmap getCustomSceneWallpaper(Context c, int slot, int reqW, int reqH) {
         if (c == null) return null;
         int s = Math.max(1, Math.min(5, slot));
-        long ts = getCustomSceneTimestamp(c, s);
-        if (cachedSceneWalls[s] != null && !cachedSceneWalls[s].isRecycled() && cachedSceneWallTs[s] == ts) {
-            return cachedSceneWalls[s];
-        }
         File f = sceneWallFile(c, s);
         if (!f.exists() || f.length() == 0) return null;
         try {
-            Bitmap b = decodeBitmapFromFile(f, Math.max(1280, reqW), Math.max(720, reqH));
-            if (b != null) {
-                cachedSceneWalls[s] = b;
-                cachedSceneWallTs[s] = ts;
-            }
-            return b;
+            // Not cached here: a static copy pinned up to 33 MB per 4K slot for the life of the process, and
+            // a small Settings preview decoded first would have been reused as the full-screen wallpaper.
+            // The caller owns the returned bitmap.
+            return decodeBitmapFromFile(f, Math.max(1280, reqW), Math.max(720, reqH));
         } catch (Throwable t) {
             return null;
         }
@@ -870,8 +857,6 @@ public final class CustomMedia {
             fos.flush();
             long ts = System.currentTimeMillis();
             prefs(c).edit().putLong("lock_wall_ts", ts).apply();
-            cachedLockWall = cropped;
-            cachedLockWallTs = ts;
             return true;
         } catch (Throwable t) {
             return false;
@@ -883,25 +868,13 @@ public final class CustomMedia {
         return prefs(c).getLong("lock_wall_ts", 0L);
     }
 
+    /** The caller owns the returned bitmap (see getCustomSceneWallpaper). */
     public static Bitmap getCustomLockWallpaper(Context c, int reqW, int reqH) {
-        return getCustomLockWallpaper(c);
-    }
-
-    public static Bitmap getCustomLockWallpaper(Context c) {
         if (c == null) return null;
-        long ts = prefs(c).getLong("lock_wall_ts", 0L);
-        if (cachedLockWall != null && !cachedLockWall.isRecycled() && cachedLockWallTs == ts) {
-            return cachedLockWall;
-        }
         File f = lockWallFile(c);
         if (!f.exists() || f.length() == 0) return null;
         try {
-            Bitmap b = decodeBitmapFromFile(f, Scenes.sceneSize(c)[0], Scenes.sceneSize(c)[1]);
-            if (b != null) {
-                cachedLockWall = b;
-                cachedLockWallTs = ts;
-            }
-            return b;
+            return decodeBitmapFromFile(f, Math.max(1280, reqW), Math.max(720, reqH));
         } catch (Throwable t) {
             return null;
         }

@@ -523,6 +523,15 @@ public class MediaWatchService extends NotificationListenerService {
          * Returns Continue Watching / Watch Next / Preview Channel items specifically for {@code pkg}
          * (combining MediaSession history + Android TV Watch Next + Android TV App Preview rows).
          */
+        /** Continue Watching shows only what was actually started (default), or also the apps' suggestion rows. */
+        static boolean onlyWatched(Context c) {
+            return Profiles.homePrefs(c).getBoolean("cw_only_watched", true);
+        }
+
+        static void setOnlyWatched(Context c, boolean on) {
+            Profiles.homePrefs(c).edit().putBoolean("cw_only_watched", on).apply();
+        }
+
         static List<Suggestions.Item> listForPackage(Context c, String pkg, int max) {
             if (c == null || pkg == null || pkg.isEmpty() || max <= 0) return java.util.Collections.emptyList();
             JSONArray a = pruneExpired(c);
@@ -728,6 +737,9 @@ public class MediaWatchService extends NotificationListenerService {
                             boolean isPriCh = Boolean.TRUE.equals(channelPriority.get(cid));
                             long pos = colLong(ppCur, "last_playback_position_millis", -1L);
                             int bucket = (pos > 0) ? 1 : (isPriCh ? 2 : 3);
+                            // Recommendation rows (nothing played yet) are the app's suggestions, not what
+                            // this home watched: left out unless "include suggestions" is chosen.
+                            if (bucket >= 2 && onlyWatched(c)) continue;
                             RawTvProgram r = parseTvProgramRow(ppCur, pkg, chName, chLink, bucket);
                             if (r != null) rows.add(r);
                         }

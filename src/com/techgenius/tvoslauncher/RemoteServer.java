@@ -25,8 +25,11 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Phone remote: a tiny HTTP server on the local network. The TV shows a QR code carrying a random
@@ -38,25 +41,45 @@ final class RemoteServer {
     private static RemoteServer instance;
 
     private final Context app;
-    private final String token;
-    private final ExecutorService pool = Executors.newFixedThreadPool(4);
+    private volatile String token;
+    private final ThreadPoolExecutor pool = idlePool(4);
     private volatile ServerSocket socket;
     private volatile boolean adbWorks = true;
+
+    /** Threads exist only while there is work: a remote nobody is using costs no memory for them. */
+    private static ThreadPoolExecutor idlePool(int size) {
+        ThreadPoolExecutor p = new ThreadPoolExecutor(size, size, 20, TimeUnit.SECONDS, new LinkedBlockingQueue<>(64));
+        p.allowCoreThreadTimeOut(true);
+        return p;
+    }
+
+    /** Called when memory is needed elsewhere. */
+    static void trim() {
+        RemoteServer s = instance;
+        if (s != null) s.iconCache.evictAll();
+    }
 
     private RemoteServer(Context c) {
         this.app = c.getApplicationContext();
         // Kept across restarts and updates so a QR the phone already scanned stays valid.
         android.content.SharedPreferences sp = app.getSharedPreferences("remote_server", Context.MODE_PRIVATE);
         String t = sp.getString("token", null);
-        if (t == null || t.length() != 12) {
-            byte[] b = new byte[6];
-            new SecureRandom().nextBytes(b);
-            StringBuilder sb = new StringBuilder();
-            for (byte x : b) sb.append(String.format("%02x", x));
-            t = sb.toString();
-            sp.edit().putString("token", t).apply();
-        }
-        this.token = t;
+        this.token = t == null || t.length() != 12 ? newToken() : t;
+    }
+
+    private String newToken() {
+        byte[] b = new byte[6];
+        new SecureRandom().nextBytes(b);
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) sb.append(String.format(java.util.Locale.US, "%02x", x));
+        String t = sb.toString();
+        app.getSharedPreferences("remote_server", Context.MODE_PRIVATE).edit().putString("token", t).apply();
+        return t;
+    }
+
+    private boolean tokenOk(String given) {
+        return given != null && java.security.MessageDigest.isEqual(
+                token.getBytes(StandardCharsets.UTF_8), given.getBytes(StandardCharsets.UTF_8));
     }
 
     static synchronized RemoteServer get(Context c) {
@@ -93,7 +116,11 @@ final class RemoteServer {
                 while (!s.isClosed()) {
                     try {
                         Socket c = s.accept();
-                        pool.execute(() -> handle(c));
+                        try {
+                            pool.execute(() -> handle(c));
+                        } catch (RejectedExecutionException busy) {
+                            c.close();
+                        }
                     } catch (Exception e) {
                         if (s.isClosed()) return;
                     }
@@ -109,7 +136,7 @@ final class RemoteServer {
     private void handle(Socket c) {
         try (Socket sock = c) {
             sock.setSoTimeout(4000);
-            InputStream in = sock.getInputStream();
+            InputStream in = new java.io.BufferedInputStream(sock.getInputStream(), 8192);
             ByteArrayOutputStream head = new ByteArrayOutputStream();
             int last4 = 0;
             while (head.size() < 8192) {
@@ -123,7 +150,8 @@ final class RemoteServer {
             String line = req.split("\r\n", 2)[0];
             String[] p = line.split(" ");
             OutputStream out = sock.getOutputStream();
-            if (p.length < 2 || !"GET".equals(p[0])) {
+            boolean post = p.length >= 2 && "POST".equals(p[0]);
+            if (p.length < 2 || !(post || "GET".equals(p[0]))) {
                 write(out, 405, "text/plain", "method not allowed".getBytes(StandardCharsets.UTF_8));
                 return;
             }
@@ -134,7 +162,19 @@ final class RemoteServer {
                 path = path.substring(0, q);
             }
             Map<String, String> qs = parse(query);
-            boolean authed = token.equals(qs.get("k"));
+            boolean authed = tokenOk(qs.get("k"));
+            if (post) {
+                if (!authed) {
+                    write(out, 403, "application/json", "{\"ok\":false,\"err\":\"token\"}".getBytes(StandardCharsets.UTF_8));
+                } else if (path.equals("/api/upload") && "wall".equals(qs.get("dest"))) {
+                    json(out, uploadWallpaper(in, req, qs.get("name"), sock));
+                } else if (path.equals("/api/upload")) {
+                    json(out, upload(sock, in, req, qs.get("name")));
+                } else {
+                    write(out, 405, "text/plain", "method not allowed".getBytes(StandardCharsets.UTF_8));
+                }
+                return;
+            }
             if (path.equals("/") || path.equals("/index.html")) {
                 // The page itself is harmless; the API below needs the token.
                 write(out, 200, "text/html; charset=utf-8", asset("remote.html"));
@@ -179,6 +219,23 @@ final class RemoteServer {
                 Widgets.reset(app);
                 applyWidgets();
                 json(out, widgets());
+            } else if (path.equals("/api/sys")) {
+                json(out, system());
+            } else if (path.equals("/api/clean")) {
+                json(out, cleanMemory());
+            } else if (path.equals("/api/sleep")) {
+                json(out, sleep(qs));
+            } else if (path.equals("/api/lowmem")) {
+                json(out, setLowMemory("1".equals(qs.get("on"))));
+            } else if (path.equals("/api/rotate")) {
+                token = newToken();
+                json(out, "{\"ok\":true}");
+            } else if (path.equals("/api/saver")) {
+                json(out, saverState());
+            } else if (path.equals("/api/saverset")) {
+                json(out, setSaver(qs));
+            } else if (path.equals("/api/videodel")) {
+                json(out, deleteVideo(qs.get("name")));
             } else if (path.equals("/api/launch")) {
                 json(out, launch(qs.get("p")));
             } else {
@@ -186,6 +243,229 @@ final class RemoteServer {
             }
         } catch (Exception ignored) {
         }
+    }
+
+    // ------------------------------------------------------------------ system panel
+    private String system() {
+        android.app.ActivityManager am = (android.app.ActivityManager) app.getSystemService(Context.ACTIVITY_SERVICE);
+        android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+        am.getMemoryInfo(mi);
+        android.os.StatFs fs = new android.os.StatFs(android.os.Environment.getDataDirectory().getPath());
+        final long mb = 1024 * 1024;
+        return "{\"ok\":true,\"ramTotal\":" + mi.totalMem / mb + ",\"ramFree\":" + mi.availMem / mb
+                + ",\"self\":" + android.os.Debug.getPss() / 1024
+                + ",\"diskTotal\":" + fs.getTotalBytes() / mb + ",\"diskFree\":" + fs.getAvailableBytes() / mb
+                + ",\"upMin\":" + android.os.SystemClock.elapsedRealtime() / 60000
+                + ",\"sleep\":" + SleepReceiver.timerLeft(app) + ",\"low\":" + Scenes.isLowMemoryMode(app) + "}";
+    }
+
+    /** Asks Android to end background processes; whatever is on screen is left alone. */
+    private String cleanMemory() {
+        android.app.ActivityManager am = (android.app.ActivityManager) app.getSystemService(Context.ACTIVITY_SERVICE);
+        android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+        am.getMemoryInfo(mi);
+        long before = mi.availMem;
+        PackageManager pm = app.getPackageManager();
+        Set<String> pkgs = new LinkedHashSet<>();
+        for (String cat : new String[]{Intent.CATEGORY_LEANBACK_LAUNCHER, Intent.CATEGORY_LAUNCHER}) {
+            for (ResolveInfo ri : pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(cat), 0)) {
+                pkgs.add(ri.activityInfo.packageName);
+            }
+        }
+        pkgs.remove(app.getPackageName());
+        for (String p : pkgs) {
+            try {
+                am.killBackgroundProcesses(p);
+            } catch (Exception ignored) {
+            }
+        }
+        try {
+            Thread.sleep(800);
+        } catch (InterruptedException ignored) {
+        }
+        am.getMemoryInfo(mi);
+        return "{\"ok\":true,\"freed\":" + Math.max(0, mi.availMem - before) / (1024 * 1024) + "}";
+    }
+
+    private String sleep(Map<String, String> qs) {
+        if ("1".equals(qs.get("now"))) {
+            uiH.post(() -> SleepReceiver.sleepNow(app));
+            return "{\"ok\":true}";
+        }
+        try {
+            int m = Integer.parseInt(qs.get("m"));
+            if (m < 0 || m > 720) return "{\"ok\":false,\"err\":\"geçersiz süre\"}";
+            SleepReceiver.setTimer(app, m);
+            return system();
+        } catch (NumberFormatException e) {
+            return "{\"ok\":false,\"err\":\"geçersiz süre\"}";
+        }
+    }
+
+    private String setLowMemory(boolean on) {
+        Scenes.setLowMemoryMode(app, on);
+        final MainActivity a = MainActivity.activeInstance;
+        if (a != null) a.runOnUiThread(a::recreate);
+        return system();
+    }
+
+    // ------------------------------------------------------------------ screensaver panel and video upload
+    private String saverState() {
+        android.content.SharedPreferences p = ScreensaverService.prefs(app);
+        StringBuilder sb = new StringBuilder("{\"ok\":true,\"style\":\"")
+                .append(p.getString(ScreensaverService.KEY_STYLE, ScreensaverService.STYLE_AUTO))
+                .append("\",\"clock\":").append(p.getBoolean(ScreensaverService.KEY_CLOCK, true))
+                .append(",\"date\":").append(p.getBoolean(ScreensaverService.KEY_DATE, true))
+                .append(",\"night\":").append(p.getBoolean(ScreensaverService.KEY_NIGHT, true))
+                .append(",\"videos\":[");
+        List<java.io.File> videos = VideoFireView.videoFiles(app);
+        for (int i = 0; i < videos.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append("{\"n\":\"").append(esc(videos.get(i).getName())).append("\",\"mb\":")
+                    .append(videos.get(i).length() / (1024 * 1024)).append('}');
+        }
+        return sb.append("]}").toString();
+    }
+
+    private String setSaver(Map<String, String> qs) {
+        android.content.SharedPreferences.Editor e = ScreensaverService.prefs(app).edit();
+        String st = qs.get("style");
+        if (ScreensaverService.STYLE_AUTO.equals(st) || ScreensaverService.STYLE_FIRE.equals(st)
+                || ScreensaverService.STYLE_SCENES.equals(st)) {
+            e.putString(ScreensaverService.KEY_STYLE, st);
+        }
+        for (String k : new String[]{ScreensaverService.KEY_CLOCK, ScreensaverService.KEY_DATE, ScreensaverService.KEY_NIGHT}) {
+            if (qs.get(k) != null) e.putBoolean(k, "1".equals(qs.get(k)));
+        }
+        e.apply();
+        return saverState();
+    }
+
+    /** A plain file name with a video extension, or null. Nothing that could leave the videos folder. */
+    private static String safeVideoName(String raw) {
+        if (raw == null) return null;
+        String n = new java.io.File(raw).getName().replaceAll("[^\\p{L}\\p{N}._ -]", "_").replaceFirst("^[. ]+", "");
+        if (n.length() > 100) n = n.substring(n.length() - 100);
+        return VideoFireView.isVideoName(n) && n.indexOf('.') > 0 ? n : null;
+    }
+
+    private String deleteVideo(String raw) {
+        String n = safeVideoName(raw);
+        java.io.File dir = app.getExternalFilesDir(null);
+        if (n == null || dir == null || !new java.io.File(dir, n).delete()) {
+            return "{\"ok\":false,\"err\":\"silinemedi\"}";
+        }
+        return saverState();
+    }
+
+    private final AtomicBoolean uploading = new AtomicBoolean();
+
+    /** Saves a video sent from the phone or a computer browser, straight to disk (never held in memory). */
+    private String upload(Socket sock, InputStream in, String head, String rawName) {
+        java.io.File dir = app.getExternalFilesDir(null);
+        String name = safeVideoName(rawName);
+        if (dir == null) return "{\"ok\":false,\"err\":\"depolama yok\"}";
+        if (name == null) return "{\"ok\":false,\"err\":\"mp4, mkv, webm, mov veya m4v olmalı\"}";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)\\r\\ncontent-length:\\s*(\\d+)").matcher(head);
+        long len = m.find() ? Long.parseLong(m.group(1)) : -1;
+        if (len <= 0) return "{\"ok\":false,\"err\":\"boyut bilinmiyor\"}";
+        if (dir.getUsableSpace() < len + 200L * 1024 * 1024) return "{\"ok\":false,\"err\":\"TV'de yeterli yer yok\"}";
+        if (!uploading.compareAndSet(false, true)) return "{\"ok\":false,\"err\":\"başka bir yükleme sürüyor\"}";
+        java.io.File part = new java.io.File(dir, name + ".part");
+        try {
+            sock.setSoTimeout(30000);
+            try (java.io.FileOutputStream os = new java.io.FileOutputStream(part)) {
+                byte[] buf = new byte[64 * 1024];
+                long left = len;
+                while (left > 0) {
+                    int r = in.read(buf, 0, (int) Math.min(buf.length, left));
+                    if (r < 0) throw new java.io.EOFException();
+                    os.write(buf, 0, r);
+                    left -= r;
+                }
+            }
+            java.io.File dst = new java.io.File(dir, name);
+            if (dst.exists() && !dst.delete()) throw new java.io.IOException("in use");
+            if (!part.renameTo(dst)) throw new java.io.IOException("rename");
+            return saverState();
+        } catch (Exception e) {
+            part.delete();
+            return "{\"ok\":false,\"err\":\"yükleme yarıda kaldı\"}";
+        } finally {
+            uploading.set(false);
+        }
+    }
+
+    /** Folder under Pictures where wallpapers sent from the phone land. */
+    static final String WALL_DIR = "Kumandadan";
+
+    /** A plain picture file name (jpg, png, webp), or null. */
+    private static String safeImageName(String raw) {
+        if (raw == null) return null;
+        String n = new java.io.File(raw).getName().replaceAll("[^\\p{L}\\p{N}._ -]", "_").replaceFirst("^[. ]+", "");
+        if (n.length() > 100) n = n.substring(n.length() - 100);
+        return n.matches("(?i).+\\.(jpe?g|png|webp)") ? n : null;
+    }
+
+    /**
+     * Saves a picture sent from the phone into Pictures/Kumandadan through MediaStore (no storage permission
+     * needed on Android 10+), streaming it to disk.
+     */
+    private String uploadWallpaper(InputStream in, String head, String rawName, Socket sock) {
+        String name = safeImageName(rawName);
+        if (name == null) return "{\"ok\":false,\"err\":\"jpg, png veya webp olmalı\"}";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)\\r\\ncontent-length:\\s*(\\d+)").matcher(head);
+        long len = m.find() ? Long.parseLong(m.group(1)) : -1;
+        if (len <= 0) return "{\"ok\":false,\"err\":\"boyut bilinmiyor\"}";
+        if (len > 80L * 1024 * 1024) return "{\"ok\":false,\"err\":\"resim 80 MB'tan büyük\"}";
+        if (android.os.Build.VERSION.SDK_INT < 29) return "{\"ok\":false,\"err\":\"bu TV'de desteklenmiyor (Android 10+)\"}";
+        if (!uploading.compareAndSet(false, true)) return "{\"ok\":false,\"err\":\"başka bir yükleme sürüyor\"}";
+        android.content.ContentResolver cr = app.getContentResolver();
+        android.net.Uri uri = null;
+        try {
+            sock.setSoTimeout(30000);
+            String lower = name.toLowerCase(java.util.Locale.ROOT);
+            String mime = lower.endsWith(".png") ? "image/png" : lower.endsWith(".webp") ? "image/webp" : "image/jpeg";
+            android.content.ContentValues v = new android.content.ContentValues();
+            v.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name);
+            v.put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime);
+            v.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH,
+                    android.os.Environment.DIRECTORY_PICTURES + "/" + WALL_DIR);
+            v.put(android.provider.MediaStore.Images.Media.IS_PENDING, 1);
+            uri = cr.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+            if (uri == null) throw new java.io.IOException("insert");
+            try (OutputStream os = cr.openOutputStream(uri)) {
+                if (os == null) throw new java.io.IOException("open");
+                byte[] buf = new byte[64 * 1024];
+                long left = len;
+                while (left > 0) {
+                    int r = in.read(buf, 0, (int) Math.min(buf.length, left));
+                    if (r < 0) throw new java.io.EOFException();
+                    os.write(buf, 0, r);
+                    left -= r;
+                }
+            }
+            android.content.ContentValues done = new android.content.ContentValues();
+            done.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0);
+            cr.update(uri, done, null, null);
+            return "{\"ok\":true,\"name\":\"" + esc(name) + "\",\"dir\":\"Pictures/" + WALL_DIR + "\"}";
+        } catch (Exception e) {
+            if (uri != null) {
+                try {
+                    cr.delete(uri, null, null);
+                } catch (Exception ignored) {
+                }
+            }
+            return "{\"ok\":false,\"err\":\"yükleme yarıda kaldı\"}";
+        } finally {
+            uploading.set(false);
+        }
+    }
+
+    private static float finite(String s) {
+        float v = Float.parseFloat(s);
+        if (Float.isNaN(v) || Float.isInfinite(v)) throw new NumberFormatException(s);
+        return v;
     }
 
     private static final Map<String, Integer> KEYS = new HashMap<>();
@@ -234,7 +514,7 @@ final class RemoteServer {
                         ? "{\"ok\":true}" : "{\"ok\":false,\"err\":\"erişilebilirlik servisi kapalı\"}";
             case "home": {
                 // This launcher, not whichever home app the firmware resolves HOME to.
-                Intent h = new Intent(app, MainActivity.class)
+                Intent h = MainActivity.homeIntent(app)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                 app.startActivity(h);
                 return "{\"ok\":true}";
@@ -320,9 +600,9 @@ final class RemoteServer {
         if (!known) return "{\"ok\":false,\"err\":\"bilinmeyen widget\"}";
         Widgets.Cfg c = Widgets.get(app, id);
         try {
-            if (qs.get("x") != null) c.x = Float.parseFloat(qs.get("x"));
-            if (qs.get("y") != null) c.y = Float.parseFloat(qs.get("y"));
-            if (qs.get("s") != null) c.scale = Float.parseFloat(qs.get("s"));
+            if (qs.get("x") != null) c.x = finite(qs.get("x"));
+            if (qs.get("y") != null) c.y = finite(qs.get("y"));
+            if (qs.get("s") != null) c.scale = finite(qs.get("s"));
             if (qs.get("v") != null) c.visible = "1".equals(qs.get("v"));
         } catch (NumberFormatException e) {
             return "{\"ok\":false,\"err\":\"geçersiz değer\"}";
@@ -364,11 +644,11 @@ final class RemoteServer {
             if (qs.get("h24") != null) Scenes.setClock24h(app, "1".equals(qs.get("h24")));
             if ("1".equals(qs.get("reset"))) Scenes.resetClockLook(app);
             Integer color = qs.get("color") == null ? null : Integer.valueOf((int) Long.parseLong(qs.get("color")));
-            Float op = qs.get("op") == null ? null : Float.valueOf(qs.get("op"));
+            Float op = qs.get("op") == null ? null : Float.valueOf(finite(qs.get("op")));
             Boolean solid = qs.get("solid") == null ? null : Boolean.valueOf("1".equals(qs.get("solid")));
-            Float size = qs.get("size") == null ? null : Float.valueOf(qs.get("size"));
+            Float size = qs.get("size") == null ? null : Float.valueOf(finite(qs.get("size")));
             Scenes.setClockLook(app, color, op, solid, size);
-            if (qs.get("weight") != null) Scenes.setClockWeight(app, Float.parseFloat(qs.get("weight")));
+            if (qs.get("weight") != null) Scenes.setClockWeight(app, finite(qs.get("weight")));
         } catch (NumberFormatException e) {
             return "{\"ok\":false,\"err\":\"geçersiz değer\"}";
         }
@@ -428,6 +708,8 @@ final class RemoteServer {
     private String browse(String raw) {
         String url = normalizeUrl(raw);
         if (url.isEmpty()) return "{\"ok\":false,\"err\":\"bağlantı boş\"}";
+        // Web pages only: no file:, content: or intent: links from the phone page.
+        if (!url.matches("(?i)^https?://.*")) return "{\"ok\":false,\"err\":\"yalnızca web bağlantısı açılır\"}";
         Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         if (isInstalled(BROWSER)) i.setPackage(BROWSER);
         try {
@@ -486,29 +768,117 @@ final class RemoteServer {
         return browserState();
     }
 
-    /** Writes into the text field that is open on the TV. ASCII falls back to adb "input text" if needed. */
+    /**
+     * Writes into the text field that is open on the TV. The phone sends the whole field on every change.
+     * ACTION_SET_TEXT (accessibility) is tried first. Fields that refuse it (web pages in TV browsers) fall back to
+     * shell "input", which is slow and only appends; so the fallback runs on one worker that always jumps to the
+     * newest text and sends only the difference. Old states are skipped instead of queueing up and being typed
+     * later into whatever field has focus by then.
+     */
     private String typeInto(Map<String, String> qs) {
         String t = qs.get("t");
         String mode = qs.get("mode");
         if ("enter".equals(mode)) return adbKey(KeyEvent.KEYCODE_ENTER);
         if ("bksp".equals(mode)) return adbKey(KeyEvent.KEYCODE_DEL);
         boolean append = "add".equals(mode);
+        boolean go = "1".equals(qs.get("go"));
         if (t == null) t = "";
-        String err = PowerService.typeText(t, append);
-        if (err == null) {
-            if ("1".equals(qs.get("go"))) adbKey(KeyEvent.KEYCODE_ENTER);
-            return "{\"ok\":true}";
-        }
-        if (t.matches("\\A\\p{ASCII}*\\z") && !t.isEmpty()) {
-            try {
-                LocalAdb.execShellOutput(app, "input text '" + t.replace("'", "'\\''").replace(" ", "%s") + "'");
-                if ("1".equals(qs.get("go"))) adbKey(KeyEvent.KEYCODE_ENTER);
-                return "{\"ok\":true}";
-            } catch (Exception ignored) {
+        String target;
+        synchronized (typeLock) {
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (typeWanted == null && now - fallbackTypedAt > FALLBACK_TYPED_TTL_MS) fallbackTyped = "";
+            String base = typeWanted != null ? typeWanted : fallbackTyped;
+            target = append ? base + t : t;
+            if (typeWanted == null && !typeBusy) {
+                String err = PowerService.typeText(t, append);
+                if (err == null) {
+                    fallbackTyped = target;
+                    fallbackTypedAt = now;
+                    if (go) adbKey(KeyEvent.KEYCODE_ENTER);
+                    return "{\"ok\":true}";
+                }
+                if (!isAscii(target)) return "{\"ok\":false,\"err\":\"" + esc(err) + "\"}";
+            } else if (!isAscii(target)) {
+                return "{\"ok\":false,\"err\":\"Türkçe harfler bu kutuya yazılamıyor\"}";
+            }
+            typeWanted = target;
+            typeGo |= go;
+            if (!typeBusy) {
+                typeBusy = true;
+                Thread w = new Thread(this::typeWorker, "remote-type");
+                w.setDaemon(true);
+                w.start();
             }
         }
-        return "{\"ok\":false,\"err\":\"" + esc(err) + "\"}";
+        return "{\"ok\":true}";
     }
+
+    private void typeWorker() {
+        while (true) {
+            String target;
+            boolean go;
+            String from;
+            synchronized (typeLock) {
+                if (typeWanted == null) {
+                    typeBusy = false;
+                    return;
+                }
+                target = typeWanted;
+                go = typeGo;
+                typeWanted = null;
+                typeGo = false;
+                from = fallbackTyped;
+            }
+            int p = 0, max = Math.min(from.length(), target.length());
+            while (p < max && from.charAt(p) == target.charAt(p)) p++;
+            int del = from.length() - p;
+            String add = target.substring(p);
+            StringBuilder cmd = new StringBuilder();
+            if (del > 0) {
+                cmd.append("input keyevent");
+                for (int i = 0; i < del; i++) cmd.append(' ').append(KeyEvent.KEYCODE_DEL);
+            }
+            if (!add.isEmpty()) {
+                if (cmd.length() > 0) cmd.append("; ");
+                cmd.append("input text '").append(add.replace("'", "'\\''").replace(" ", "%s")).append('\'');
+            }
+            if (go) {
+                if (cmd.length() > 0) cmd.append("; ");
+                cmd.append("input keyevent ").append(KeyEvent.KEYCODE_ENTER);
+            }
+            boolean ok = cmd.length() == 0;
+            if (!ok) {
+                try {
+                    LocalAdb.execShellOutput(app, cmd.toString());
+                    ok = true;
+                } catch (Exception ignored) {
+                }
+            }
+            synchronized (typeLock) {
+                if (ok) fallbackTyped = target;
+                fallbackTypedAt = android.os.SystemClock.elapsedRealtime();
+                if (!ok) {
+                    // Could not reach the shell: drop what is waiting rather than typing it later somewhere else.
+                    typeWanted = null;
+                    typeGo = false;
+                }
+            }
+        }
+    }
+
+    private static boolean isAscii(String s) {
+        for (int i = 0; i < s.length(); i++) if (s.charAt(i) > 0x7F) return false;
+        return true;
+    }
+
+    private final Object typeLock = new Object();
+    /** Newest text the phone wants that the fallback worker has not written yet (null = nothing waiting). */
+    private String typeWanted;
+    private boolean typeGo, typeBusy;
+    /** What the TV's field holds as far as this server knows; forgotten after a pause (likely another field). */
+    private String fallbackTyped = "";
+    private long fallbackTypedAt = 0L;
+    private static final long FALLBACK_TYPED_TTL_MS = 30_000L;
 
     // ------------------------------------------------------------------ phone trackpad -> on-screen mouse
     private final android.os.Handler uiH = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -518,9 +888,24 @@ final class RemoteServer {
     private final Runnable hideCursor = new Runnable() {
         @Override
         public void run() {
-            if (cursorView != null) cursorView.setVisibility(android.view.View.INVISIBLE);
+            dropCursor();
         }
     };
+
+    /**
+     * Removes the overlay window, not just the arrow: a full-screen window left in place keeps its own
+     * graphics buffers and is composited over every app, video included, for as long as the launcher lives.
+     */
+    private void dropCursor() {
+        if (cursorLayer == null) return;
+        try {
+            cursorView.animate().cancel();
+            ((android.view.WindowManager) app.getSystemService(Context.WINDOW_SERVICE)).removeView(cursorLayer);
+        } catch (Exception ignored) {
+        }
+        cursorLayer = null;
+        cursorView = null;
+    }
 
     /** The pointer drawn over every app. White arrow with a dark outline; hot-spot is its tip. */
     private static final class CursorView extends android.view.View {
@@ -577,6 +962,7 @@ final class RemoteServer {
     private void ensureCursor() {
         if (cursorView != null) return;
         cursorView = new CursorView(app);
+        cursorView.setVisibility(android.view.View.INVISIBLE);   // shown at its position, not sliding in from a corner
         int size = Math.round(36 * app.getResources().getDisplayMetrics().density / 2f);
         // One full-screen, untouchable layer that never moves; only the arrow inside it is translated,
         // which is a cheap render-property change instead of a window relayout per move.
@@ -598,7 +984,7 @@ final class RemoteServer {
     // com.tcl.browser ignores touch and mouse taps: it draws its own cursor that only moves while a D-pad key is
     // held (distance grows with hold time, roughly 0.0015 * ms^2 px) and clicks on OK. So while it is on top, the
     // trackpad drives that cursor with timed key holds instead of the overlay arrow.
-    private final java.util.concurrent.ExecutorService tvbWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final ThreadPoolExecutor tvbWorker = idlePool(1);
     private float tvbX, tvbY;
     private boolean tvbBusy;
     private long tvbCheckedAt;
@@ -689,8 +1075,8 @@ final class RemoteServer {
         }
         float dx = 0, dy = 0;
         try {
-            if (qs.get("dx") != null) dx = Float.parseFloat(qs.get("dx"));
-            if (qs.get("dy") != null) dy = Float.parseFloat(qs.get("dy"));
+            if (qs.get("dx") != null) dx = finite(qs.get("dx"));
+            if (qs.get("dy") != null) dy = finite(qs.get("dy"));
         } catch (NumberFormatException e) {
             return "{\"ok\":false,\"err\":\"geçersiz değer\"}";
         }
@@ -707,13 +1093,13 @@ final class RemoteServer {
         final boolean toggle = "toggle".equals(show);
         uiH.post(() -> {
             try {
-                ensureCursor();
-                boolean visible = cursorView.getVisibility() == android.view.View.VISIBLE;
+                boolean visible = cursorView != null && cursorView.getVisibility() == android.view.View.VISIBLE;
                 if (hide || (toggle && visible)) {
                     uiH.removeCallbacks(hideCursor);
-                    cursorView.setVisibility(android.view.View.INVISIBLE);
+                    dropCursor();
                     return;
                 }
+                ensureCursor();
                 if (cursorView.getVisibility() != android.view.View.VISIBLE) {
                     cursorView.animate().cancel();
                     cursorView.setTranslationX(x);
@@ -781,15 +1167,18 @@ final class RemoteServer {
         return sb.append("]}").toString();
     }
 
-    private final Map<String, byte[]> iconCache = new HashMap<>();
+    private final android.util.LruCache<String, byte[]> iconCache = new android.util.LruCache<String, byte[]>(512 * 1024) {
+        @Override
+        protected int sizeOf(String key, byte[] value) {
+            return value.length;
+        }
+    };
 
     /** App icon as a small PNG (the phone page shows it next to the app name). */
     private byte[] icon(String pkg) {
         if (pkg == null) return null;
-        synchronized (iconCache) {
-            byte[] c = iconCache.get(pkg);
-            if (c != null) return c;
-        }
+        byte[] c = iconCache.get(pkg);
+        if (c != null) return c;
         try {
             android.graphics.drawable.Drawable d = app.getPackageManager().getApplicationIcon(pkg);
             int px = 96;
@@ -801,9 +1190,7 @@ final class RemoteServer {
             bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bo);
             bmp.recycle();
             byte[] out = bo.toByteArray();
-            synchronized (iconCache) {
-                iconCache.put(pkg, out);
-            }
+            iconCache.put(pkg, out);
             return out;
         } catch (Exception e) {
             return null;
@@ -848,7 +1235,14 @@ final class RemoteServer {
     }
 
     private static String esc(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ");
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch == '\\' || ch == '"') sb.append('\\').append(ch);
+            else if (ch < 0x20) sb.append(' ');   // an app name with a tab or newline must not break the JSON
+            else sb.append(ch);
+        }
+        return sb.toString();
     }
 
     private static void json(OutputStream out, String body) throws Exception {

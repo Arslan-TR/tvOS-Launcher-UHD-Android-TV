@@ -63,7 +63,6 @@
         android:banner="@drawable/banner"
         android:theme="@style/HomeTheme"
         android:requestLegacyExternalStorage="true"
-        android:largeHeap="true"
         android:allowBackup="false">
 
         <activity
@@ -100,6 +99,12 @@
             </intent-filter>
         </service>
         <receiver android:name=".SleepReceiver" android:exported="false" />
+        <!-- Remote app buttons on Google TV (YouTube, Netflix...) when Google TV's own launcher is disabled. -->
+        <receiver android:name=".AppButtonReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.global_button.ACTION_LAUNCH_APP" />
+            </intent-filter>
+        </receiver>
         <receiver android:name=".AppUpdater$InstallStatusReceiver" android:exported="false" />
         <service
             android:name=".PowerService"

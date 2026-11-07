@@ -155,7 +155,7 @@ public final class RecentAppsOverlay {
             MainActivity.activeInstance.runOnUiThread(() -> showInActivity(MainActivity.activeInstance));
             return;
         }
-        Intent i = new Intent(c, MainActivity.class)
+        Intent i = MainActivity.homeIntent(c)
                 .putExtra("panel", "recents")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         try {
@@ -972,7 +972,7 @@ public final class RecentAppsOverlay {
             return;
         }
         try {
-            Intent home = new Intent(c, MainActivity.class)
+            Intent home = MainActivity.homeIntent(c)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                             | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                             | Intent.FLAG_ACTIVITY_SINGLE_TOP);

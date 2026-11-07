@@ -8,44 +8,132 @@ import android.view.Surface;
 import android.view.TextureView;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
 
-/** Looping, muted full-screen video (center-crop so it always fills the screen). */
+/**
+ * Muted full-screen video for the screensaver (center-crop, so it always fills the screen). One file
+ * loops; several play one after another in random order. A file the TV cannot decode is skipped, and
+ * when none plays the owner is told so it can fall back to the drawn fireplace.
+ */
 public class VideoFireView extends TextureView implements TextureView.SurfaceTextureListener {
-    private final File file;
-    private MediaPlayer mp;
-    private boolean wantPlay;
-    private int vw, vh;
-
-    public static File videoFile(Context c) {
-        File d = c.getExternalFilesDir(null);
-        return d == null ? null : new File(d, "somine.mp4");
+    interface OnFailed {
+        void onAllVideosFailed();
     }
 
-    public VideoFireView(Context c, File f) {
+    private final List<File> files;
+    private final OnFailed onFailed;
+    private Surface surface;
+    private MediaPlayer mp;
+    private boolean prepared, wantPlay;
+    private int vw, vh, index, failures;
+
+    /** Every video in the app's external files folder, where the phone upload and adb push put them. */
+    public static List<File> videoFiles(Context c) {
+        List<File> out = new ArrayList<>();
+        File dir = c.getExternalFilesDir(null);
+        File[] all = dir == null ? null : dir.listFiles();
+        if (all != null) {
+            for (File f : all) {
+                if (f.isFile() && f.length() > 0 && isVideoName(f.getName())) out.add(f);
+            }
+        }
+        return out;
+    }
+
+    static boolean isVideoName(String name) {
+        String n = name.toLowerCase(Locale.US);
+        return n.endsWith(".mp4") || n.endsWith(".m4v") || n.endsWith(".mkv") || n.endsWith(".webm") || n.endsWith(".mov");
+    }
+
+    public VideoFireView(Context c, List<File> videos, OnFailed failed) {
         super(c);
-        file = f;
+        files = new ArrayList<>(videos);
+        Collections.shuffle(files);
+        onFailed = failed;
         setSurfaceTextureListener(this);
     }
 
-    public void start() { wantPlay = true; if (mp != null) mp.start(); }
-    public void stop() { wantPlay = false; if (mp != null) try { mp.pause(); } catch (Exception ignored) {} }
-    public void release() {
-        wantPlay = false;
-        if (mp != null) { try { mp.release(); } catch (Exception ignored) {} mp = null; }
+    public void start() {
+        wantPlay = true;
+        if (mp != null && prepared) mp.start();
     }
 
-    @Override public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int h) {
+    public void stop() {
+        wantPlay = false;
+        if (mp == null || !prepared) return;
         try {
-            mp = new MediaPlayer();
-            mp.setDataSource(file.getAbsolutePath());
-            mp.setSurface(new Surface(st));
-            mp.setLooping(true);
-            mp.setVolume(0f, 0f);
-            mp.setOnVideoSizeChangedListener((m, x, y) -> { vw = x; vh = y; fit(); });
-            mp.setOnPreparedListener(m -> { vw = m.getVideoWidth(); vh = m.getVideoHeight(); fit(); if (wantPlay) m.start(); });
-            mp.prepareAsync();
+            mp.pause();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public void release() {
+        wantPlay = false;
+        releasePlayer();
+        if (surface != null) {
+            surface.release();
+            surface = null;
+        }
+    }
+
+    private void releasePlayer() {
+        prepared = false;
+        if (mp == null) return;
+        try {
+            mp.release();
+        } catch (Exception ignored) {
+        }
+        mp = null;
+    }
+
+    private void playCurrent() {
+        releasePlayer();
+        if (surface == null || files.isEmpty()) return;
+        try {
+            MediaPlayer p = new MediaPlayer();
+            mp = p;
+            p.setDataSource(files.get(index).getAbsolutePath());
+            p.setSurface(surface);
+            p.setLooping(files.size() == 1);
+            p.setVolume(0f, 0f);
+            p.setOnVideoSizeChangedListener((m, x, y) -> {
+                vw = x;
+                vh = y;
+                fit();
+            });
+            p.setOnPreparedListener(m -> {
+                prepared = true;
+                failures = 0;
+                vw = m.getVideoWidth();
+                vh = m.getVideoHeight();
+                fit();
+                if (wantPlay) m.start();
+            });
+            p.setOnCompletionListener(m -> next());
+            p.setOnErrorListener((m, what, extra) -> {
+                failed();
+                return true;
+            });
+            p.prepareAsync();
         } catch (Exception e) {
-            release();
+            failed();
+        }
+    }
+
+    private void next() {
+        index = (index + 1) % files.size();
+        playCurrent();
+    }
+
+    private void failed() {
+        if (++failures >= files.size()) {
+            releasePlayer();
+            if (onFailed != null) post(onFailed::onAllVideosFailed);
+        } else {
+            post(this::next);
         }
     }
 
@@ -59,7 +147,24 @@ public class VideoFireView extends TextureView implements TextureView.SurfaceTex
         setTransform(m);
     }
 
-    @Override public void onSurfaceTextureSizeChanged(SurfaceTexture st, int w, int h) { fit(); }
-    @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture st) { release(); return true; }
-    @Override public void onSurfaceTextureUpdated(SurfaceTexture st) {}
+    @Override
+    public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int h) {
+        surface = new Surface(st);
+        playCurrent();
+    }
+
+    @Override
+    public void onSurfaceTextureSizeChanged(SurfaceTexture st, int w, int h) {
+        fit();
+    }
+
+    @Override
+    public boolean onSurfaceTextureDestroyed(SurfaceTexture st) {
+        release();
+        return true;
+    }
+
+    @Override
+    public void onSurfaceTextureUpdated(SurfaceTexture st) {
+    }
 }

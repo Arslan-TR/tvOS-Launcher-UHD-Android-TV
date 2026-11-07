@@ -96,7 +96,7 @@ public class SetupActivity extends Activity {
         skipBtn.setOnClickListener(v -> {
             Scenes.setClock24h(this, I18n.isDefault24hForLang(I18n.getLang(this)));
             getSharedPreferences("setup", MODE_PRIVATE).edit().putBoolean(K_DONE, true).putInt("cur_step", 0).apply();
-            startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+            startActivity(MainActivity.homeIntent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
             finish();
             overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
         });
@@ -1224,7 +1224,7 @@ public class SetupActivity extends Activity {
         LinearLayout l = list();
         option(l, tr("Go to Home Screen", "Ana Ekrana Git"), null, false, () -> {
             getSharedPreferences("setup", MODE_PRIVATE).edit().putBoolean(K_DONE, true).putInt("cur_step", 0).apply();
-            startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+            startActivity(MainActivity.homeIntent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
             finish();
             overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
         });

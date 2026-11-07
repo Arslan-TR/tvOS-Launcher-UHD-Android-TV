@@ -54,6 +54,23 @@ public class PowerService extends AccessibilityService {
     private Thread volWatchThread;
     private volatile boolean audioDumpWatchActive = false;
     private Thread audioDumpWatchThread;
+    /**
+     * A full AudioService dump costs system_server a lot (on a weak TV, polling it every 60 ms kept system_server
+     * above 100% CPU and froze the TV). So the dump runs only for a short while after a volume key or a volume
+     * change was seen; the rest of the time the watcher thread sleeps.
+     */
+    private static final long AUDIO_DUMP_AWAKE_MS = 3000L;
+    private final Object audioDumpLock = new Object();
+    private volatile long audioDumpAwakeUntil = 0L;
+    private android.content.BroadcastReceiver volumeChangedReceiver;
+
+    /** Lets the volume watcher run its dump loop for a few seconds. Cheap to call often. */
+    private void wakeAudioDumpWatcher() {
+        audioDumpAwakeUntil = SystemClock.uptimeMillis() + AUDIO_DUMP_AWAKE_MS;
+        synchronized (audioDumpLock) {
+            audioDumpLock.notifyAll();
+        }
+    }
     private volatile long serviceConnectedElapsedMs = 0L;
     private static final long VOL_REPEAT_INITIAL_MS = 280L;
     private static final long VOL_REPEAT_INTERVAL_MS = 85L;
@@ -489,6 +506,20 @@ public class PowerService extends AccessibilityService {
         }
         audioDumpWatchActive = true;
         final Context appCtx = getApplicationContext();
+        if (volumeChangedReceiver == null) {
+            volumeChangedReceiver = new android.content.BroadcastReceiver() {
+                @Override
+                public void onReceive(Context c, Intent i) {
+                    wakeAudioDumpWatcher();
+                }
+            };
+            try {
+                registerReceiver(volumeChangedReceiver,
+                        new android.content.IntentFilter("android.media.VOLUME_CHANGED_ACTION"));
+            } catch (Throwable ignored) {
+                volumeChangedReceiver = null;
+            }
+        }
         audioDumpWatchThread = new Thread(() -> {
             android.os.IBinder audioBinder = null;
             android.os.IBinder inputBinder = null;
@@ -541,6 +572,14 @@ public class PowerService extends AccessibilityService {
                             Thread.sleep(2000L);
                             continue;
                         }
+                    }
+
+                    // Idle: no volume key or volume change lately. Keep the baseline and sleep until woken.
+                    if (baselineInitialized && !wmKeyIsDown && SystemClock.uptimeMillis() > audioDumpAwakeUntil) {
+                        synchronized (audioDumpLock) {
+                            audioDumpLock.wait(5000L);
+                        }
+                        continue;
                     }
 
                     android.os.ParcelFileDescriptor[] pipe = android.os.ParcelFileDescriptor.createPipe();
@@ -735,6 +774,13 @@ public class PowerService extends AccessibilityService {
         audioDumpWatchActive = false;
         volDir = 0;
         handler.removeCallbacks(volRepeatRunnable);
+        if (volumeChangedReceiver != null) {
+            try {
+                unregisterReceiver(volumeChangedReceiver);
+            } catch (Throwable ignored) {
+            }
+            volumeChangedReceiver = null;
+        }
         if (audioDumpWatchThread != null) {
             audioDumpWatchThread.interrupt();
             audioDumpWatchThread = null;
@@ -745,6 +791,9 @@ public class PowerService extends AccessibilityService {
     protected boolean onKeyEvent(KeyEvent event) {
         if (event == null) return false;
         int code = event.getKeyCode();
+        if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            wakeAudioDumpWatcher();
+        }
         if (event.getAction() == KeyEvent.ACTION_DOWN
                 && event.getRepeatCount() == 0
                 && (code == KeyEvent.KEYCODE_BACK
@@ -843,7 +892,7 @@ public class PowerService extends AccessibilityService {
             Runnable r = onDone;
             onDone = null;
             if (c != null) {
-                c.startActivity(new Intent(c, MainActivity.class)
+                c.startActivity(MainActivity.homeIntent(c)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP));
             }
             if (r != null) r.run();

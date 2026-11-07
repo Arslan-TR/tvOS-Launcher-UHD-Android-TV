@@ -74,7 +74,7 @@ public class BootReceiver extends BroadcastReceiver {
     public static void launchHomeImmediately(Context context) {
         if (context == null) return;
         try {
-            Intent i = new Intent(context, MainActivity.class);
+            Intent i = MainActivity.homeIntent(context);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                     | Intent.FLAG_ACTIVITY_CLEAR_TOP
                     | Intent.FLAG_ACTIVITY_SINGLE_TOP

@@ -201,6 +201,26 @@ svg.f{fill:currentColor;stroke:none}
 .sh-list .sep{height:1px;margin:0 20px;background:rgba(255,255,255,.1)}
 /* browser tab v2 */
 .tabs.t3 button.on{background:linear-gradient(180deg,#c9d4ff,#8498ee);color:#0d1226;box-shadow:0 4px 12px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.7)}
+#tsheet{display:none;position:fixed;inset:0;z-index:6;background:rgba(0,0,0,.7);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);align-items:flex-end;overflow:auto}
+#tsheet.show{display:flex}
+#tsheet .card{width:100%;max-width:430px;margin:auto auto 0;padding:18px 16px calc(24px + env(safe-area-inset-bottom));border-radius:30px 30px 0 0;background:linear-gradient(180deg,#1d1e23,#121316)}
+#tsheet h2{margin:0 4px 14px;font-size:17px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
+#tsheet h2 button{border:0;background:transparent;color:var(--mut);font-size:15px}
+#tsheet h3{margin:18px 4px 8px;font-size:13px;font-weight:600;color:var(--mut)}
+.tp-box{border-radius:18px;padding:14px;background:rgba(255,255,255,.05)}
+.tp-bar{height:8px;border-radius:4px;background:#34353c;overflow:hidden;margin:8px 0}
+.tp-bar i{display:block;height:100%;background:var(--green)}
+.tp-row{display:flex;justify-content:space-between;gap:10px;font-size:14px;color:var(--mut)}
+.tp-row b{color:var(--t);font-weight:600}
+.tp-chips{display:flex;flex-wrap:wrap;gap:8px}
+.tp-chips button{flex:1 1 auto;min-height:44px;padding:0 12px;border:0;border-radius:14px;background:rgba(255,255,255,.08);font-size:14px}
+.tp-chips button.on{background:#f3f4f7;color:#101114;font-weight:700}
+.tp-act{width:100%;min-height:46px;margin-top:10px;border:0;border-radius:14px;font-size:15px}
+#tsheet .tog{min-height:48px;margin-top:8px;border:0;background:rgba(255,255,255,.05)}
+.tp-vid{display:flex;align-items:center;gap:10px;padding:10px 0;font-size:14px;border-top:1px solid rgba(255,255,255,.08)}
+.tp-vid span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-vid small{color:var(--mut)}
+.tp-vid button{min-width:44px;min-height:44px;border:0;border-radius:12px;background:rgba(255,69,58,.16);color:#ff6961}
 #browser{display:none}
 #browser .nb{border-radius:26px;padding:12px;margin-bottom:14px;background:linear-gradient(180deg,#1a1e30,#0f1220);box-shadow:inset 0 1px 0 rgba(160,185,255,.16),0 8px 20px rgba(0,0,0,.5),0 0 0 1px rgba(110,140,255,.1)}
 .urlpill{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 4px;border-radius:26px;margin-bottom:10px;background:rgba(10,12,22,.7);box-shadow:inset 0 2px 6px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.08)}
@@ -471,6 +491,44 @@ svg.f{fill:currentColor;stroke:none}
 <div id="apps"></div>
 <div id="qbar"><input id="q" type="search" placeholder="Uygulama ara" autocomplete="off"></div>
 
+<div id="tsheet"><div class="card">
+  <h2>TV Paneli<button id="tcl">Kapat</button></h2>
+  <h3>Bellek ve depolama</h3>
+  <div class="tp-box">
+    <div class="tp-row"><span>Bellek</span><b id="tram">…</b></div>
+    <div class="tp-bar"><i id="trambar" style="width:0"></i></div>
+    <div class="tp-row"><span>Başlatıcının payı</span><b id="tself">…</b></div>
+    <div class="tp-row"><span>Boş depolama</span><b id="tdisk">…</b></div>
+    <div class="tp-row"><span>Açık kalma süresi</span><b id="tup">…</b></div>
+    <button class="tp-act g" id="tclean">Belleği boşalt</button>
+  </div>
+  <button class="tog g" id="tlow"><span>Düşük bellek modu (1080p duvar kâğıdı)</span><span class="sw" id="tlowsw"></span></button>
+  <h3>Uyku zamanlayıcı</h3>
+  <div class="tp-chips" id="tsleep"></div>
+  <button class="tp-act g" id="toff">TV'yi şimdi kapat</button>
+  <h3>Ekran koruyucu</h3>
+  <div class="tp-chips" id="tstyle"></div>
+  <button class="tog g" data-s="show_clock"><span>Saat</span><span class="sw"></span></button>
+  <button class="tog g" data-s="show_date"><span>Tarih</span><span class="sw"></span></button>
+  <button class="tog g" data-s="night_dim"><span>Gece karart (00.00-07.00)</span><span class="sw"></span></button>
+  <h3>Ekran koruyucu videoları</h3>
+  <div class="tp-box">
+    <div id="tvids"></div>
+    <input type="file" id="tfile" accept="video/*,.mkv,.webm,.mov,.m4v" multiple hidden>
+    <button class="tp-act g" id="tup1">Video yükle</button>
+    <div class="tp-bar" id="tpbar" style="display:none"><i id="tprog" style="width:0"></i></div>
+  </div>
+  <h3>Duvar kâğıtları</h3>
+  <div class="tp-box">
+    <div class="tp-row" id="twinfo">Resimler TV'de Pictures/Kumandadan klasörüne kaydedilir (jpg, png, webp).</div>
+    <input type="file" id="twfile" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
+    <button class="tp-act g" id="twup">Duvar kâğıdı yükle</button>
+    <div class="tp-bar" id="twbar" style="display:none"><i id="twprog" style="width:0"></i></div>
+  </div>
+  <h3>Güvenlik</h3>
+  <button class="tp-act g" id="trot">Bağlantı anahtarını yenile</button>
+</div></div>
+
 <div id="sheet"><div class="card">
   <div class="grab"></div>
   <div class="sh-hd"><div><h2>Diğer Tuşlar</h2><p>Hızlı işlemler ve gelişmiş ayarlar</p></div><button class="xb g" id="cl" aria-label="Kapat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
@@ -487,6 +545,8 @@ svg.f{fill:currentColor;stroke:none}
 
   <div class="sh-lab">Kişiselleştirme</div>
   <div class="sh-list g">
+    <button id="topen"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2.5"/><path d="M8 21h8M12 17v4"/></svg><span>TV Paneli</span><i>›</i></button>
+    <div class="sep"></div>
     <button id="copen"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Saati Özelleştir</span><i>›</i></button>
     <div class="sep"></div>
     <button id="wopen"><svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg><span>Widget Düzenle</span><i>›</i></button>
@@ -531,7 +591,7 @@ svg.f{fill:currentColor;stroke:none}
 
   <div class="cp-card cp-sl">
     <div class="cr-row"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg><span class="lb">Saydamlık</span><input class="rng2" type="range" id="cr_op" min="15" max="100" value="100"><span class="vl" id="cop">100%</span></div>
-    <div class="cr-row"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg><span class="lb">Boyut</span><input class="rng2" type="range" id="cr_sz" min="50" max="150" value="100"><span class="vl" id="csz">100%</span></div>
+    <div class="cr-row"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg><span class="lb">Boyut</span><input class="rng2" type="range" id="cr_sz" min="30" max="150" value="100"><span class="vl" id="csz">100%</span></div>
     <div class="cr-row"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5zM3 12.5l9 5 9-5M3 16.5l9 5 9-5"/></svg><span class="lb">Kalınlık</span><input class="rng2" type="range" id="cr_wt" min="0" max="100" value="24"><span class="vl" id="cwt">Normal</span></div>
   </div>
 
@@ -867,6 +927,94 @@ $('nb_ip').onclick=()=>{const t=document.createElement('textarea');t.value=locat
   try{document.execCommand('copy');say('adres kopyalandı')}catch(e){say(location.origin)}t.remove()};
 
 /* settings sheet */
+(function(){
+  const T=$('tsheet');let timer;
+  const size=mb=>mb>=1024?(mb/1024).toFixed(1)+' GB':mb+' MB';
+  function drawSys(s){
+    $('tram').textContent=size(s.ramFree)+' boş / '+size(s.ramTotal);
+    $('trambar').style.width=Math.round(100*(s.ramTotal-s.ramFree)/s.ramTotal)+'%';
+    $('tself').textContent=size(s.self);
+    $('tdisk').textContent=size(s.diskFree);
+    $('tup').textContent=s.upMin>=60?Math.floor(s.upMin/60)+' sa '+(s.upMin%60)+' dk':s.upMin+' dk';
+    $('tlowsw').className='sw'+(s.low?' on':'');
+    const box=$('tsleep');box.textContent='';
+    [[0,'Kapalı'],[15,'15 dk'],[30,'30 dk'],[60,'1 sa'],[120,'2 sa']].forEach(([m,l])=>{
+      const b=document.createElement('button');b.textContent=l;
+      b.className=(m==0?!s.sleep:(s.sleep<=m&&s.sleep>m/2))?'on':'';
+      b.onclick=async()=>{const j=await api('sleep?m='+m);if(j&&j.ok)drawSys(j)};
+      box.appendChild(b);
+    });
+  }
+  function drawSaver(v){
+    const box=$('tstyle');box.textContent='';
+    [['fireplace','Video / şömine'],['fire','Çizilen şömine'],['scenes','Duvar kâğıtları']].forEach(([k,l])=>{
+      const b=document.createElement('button');b.textContent=l;b.className=v.style==k?'on':'';
+      b.onclick=async()=>{const j=await api('saverset?style='+k);if(j&&j.ok)drawSaver(j)};
+      box.appendChild(b);
+    });
+    const vals={show_clock:v.clock,show_date:v.date,night_dim:v.night};
+    T.querySelectorAll('[data-s]').forEach(b=>{
+      const on=vals[b.dataset.s];b.querySelector('.sw').className='sw'+(on?' on':'');
+      b.onclick=async()=>{const j=await api('saverset?'+b.dataset.s+'='+(on?0:1));if(j&&j.ok)drawSaver(j)};
+    });
+    const list=$('tvids');list.textContent='';
+    if(!v.videos.length){const d=document.createElement('div');d.className='tp-row';d.textContent='Video yok, çizilen şömine oynar.';list.appendChild(d)}
+    v.videos.forEach(x=>{
+      const r=document.createElement('div');r.className='tp-vid';
+      const n=document.createElement('span');n.textContent=x.n;
+      const m=document.createElement('small');m.textContent=size(x.mb);
+      const del=document.createElement('button');del.textContent='Sil';del.setAttribute('aria-label',x.n+' sil');
+      del.onclick=async()=>{if(!confirm(x.n+' silinsin mi?'))return;const j=await api('videodel?name='+encodeURIComponent(x.n));if(j&&j.ok)drawSaver(j);else say((j&&j.err)||'silinemedi')};
+      r.append(n,m,del);list.appendChild(r);
+    });
+  }
+  async function refresh(){const s=await api('sys');if(s&&s.ok)drawSys(s)}
+  function sendFile(f){return new Promise(done=>{
+    const x=new XMLHttpRequest();
+    x.open('POST','/api/upload?k='+encodeURIComponent(K)+'&name='+encodeURIComponent(f.name));
+    x.upload.onprogress=e=>{if(e.lengthComputable)$('tprog').style.width=Math.round(100*e.loaded/e.total)+'%'};
+    x.onload=()=>{let j=null;try{j=JSON.parse(x.responseText)}catch(e){}
+      if(j&&j.ok)drawSaver(j);else say((j&&j.err)||'yüklenemedi');done()};
+    x.onerror=()=>{say('yükleme yarıda kaldı');done()};
+    x.send(f);
+  })}
+  $('tfile').onchange=async e=>{
+    const up=$('tup1');up.disabled=true;$('tpbar').style.display='block';
+    for(const f of e.target.files){up.textContent=f.name+' yükleniyor…';$('tprog').style.width='0';await sendFile(f)}
+    up.disabled=false;up.textContent='Video yükle';$('tpbar').style.display='none';e.target.value='';
+  };
+  $('tup1').onclick=()=>$('tfile').click();
+  /* wallpapers -> Pictures/Kumandadan on the TV */
+  function sendWall(f){return new Promise(done=>{
+    const x=new XMLHttpRequest();
+    x.open('POST','/api/upload?dest=wall&k='+encodeURIComponent(K)+'&name='+encodeURIComponent(f.name));
+    x.upload.onprogress=e=>{if(e.lengthComputable)$('twprog').style.width=Math.round(100*e.loaded/e.total)+'%'};
+    x.onload=()=>{let j=null;try{j=JSON.parse(x.responseText)}catch(e){}done(j&&j.ok?null:((j&&j.err)||'yüklenemedi'))};
+    x.onerror=()=>done('yükleme yarıda kaldı');
+    x.send(f);
+  })}
+  $('twfile').onchange=async e=>{
+    const up=$('twup'),files=[...e.target.files];let ok=0,last='';
+    up.disabled=true;$('twbar').style.display='block';
+    for(const f of files){up.textContent=f.name+' yükleniyor…';$('twprog').style.width='0';
+      const err=await sendWall(f);if(err)last=err;else ok++}
+    up.disabled=false;up.textContent='Duvar kâğıdı yükle';$('twbar').style.display='none';e.target.value='';
+    $('twinfo').textContent=ok+' / '+files.length+' resim Pictures/Kumandadan klasörüne kaydedildi'+(last?' ('+last+')':'');
+    say(ok?ok+' duvar kâğıdı yüklendi':last);
+  };
+  $('twup').onclick=()=>$('twfile').click();
+  $('topen').onclick=async()=>{$('sheet').classList.remove('show');T.classList.add('show');refresh();
+    const v=await api('saver');if(v&&v.ok)drawSaver(v);clearInterval(timer);timer=setInterval(refresh,5000)};
+  const close=()=>{T.classList.remove('show');clearInterval(timer)};
+  $('tcl').onclick=close;
+  T.addEventListener('click',e=>{if(e.target===T)close()});
+  $('tclean').onclick=async()=>{const b=$('tclean');b.disabled=true;b.textContent='Boşaltılıyor…';
+    const j=await api('clean');b.disabled=false;b.textContent='Belleği boşalt';
+    await refresh();if(j&&j.ok)say(j.freed+' MB boşaldı')};
+  $('tlow').onclick=async()=>{const on=!$('tlowsw').classList.contains('on');const j=await api('lowmem?on='+(on?1:0));if(j&&j.ok)drawSys(j)};
+  $('toff').onclick=async()=>{if(confirm('TV kapatılsın mı?'))await api('sleep?now=1')};
+  $('trot').onclick=async()=>{if(confirm('Bağlı telefonların bağlantısı kesilir. TV\'deki yeni QR kodu okutman gerekir. Devam edilsin mi?'))await api('rotate')};
+})();
 $('gear').onclick=()=>$('sheet').classList.add('show');
 $('cl').onclick=()=>$('sheet').classList.remove('show');
 $('sheet').addEventListener('click',e=>{if(e.target==$('sheet'))$('sheet').classList.remove('show')});

@@ -66,6 +66,7 @@ public final class Scenes {
      * 3840x2160 instead of being drawn at 1080p and upscaled.
      */
     public static int[] sceneSize(Context c) {
+        if (isLowMemoryMode(c)) return new int[]{1920, 1080};
         try {
             WindowManager wm = (WindowManager) c.getSystemService(Context.WINDOW_SERVICE);
             Display.Mode m = wm.getDefaultDisplay().getMode();
@@ -73,6 +74,15 @@ public final class Scenes {
         } catch (Throwable ignored) {
         }
         return new int[]{1920, 1080};
+    }
+
+    /** Low memory mode: draw and keep wallpapers at 1080p (a quarter of the memory of 4K). */
+    public static boolean isLowMemoryMode(Context c) {
+        return prefs(c).getBoolean("low_memory_mode", false);
+    }
+
+    public static void setLowMemoryMode(Context c, boolean on) {
+        prefs(c).edit().putBoolean("low_memory_mode", on).apply();
     }
 
     public static final int[] STAY_OPTIONS = {10, 15, 20, 30, 45, 60, 120};
@@ -684,7 +694,7 @@ public final class Scenes {
     }
 
     public static float getClockSize(Context c) {
-        return Math.max(0.5f, Math.min(1.5f, prefs(c).getFloat("clock_size", 1f)));
+        return Math.max(0.3f, Math.min(1.5f, prefs(c).getFloat("clock_size", 1f)));
     }
 
     /** Stroke weight 0..1; 0.24 is the style's normal weight (Duo: wght 344). */
@@ -703,7 +713,7 @@ public final class Scenes {
         if (color != null) e.putInt("clock_color", color);
         if (opacity != null) e.putFloat("clock_opacity", Math.max(0.15f, Math.min(1f, opacity)));
         if (solid != null) e.putBoolean("clock_solid", solid);
-        if (size != null) e.putFloat("clock_size", Math.max(0.5f, Math.min(1.5f, size)));
+        if (size != null) e.putFloat("clock_size", Math.max(0.3f, Math.min(1.5f, size)));
         e.apply();
     }
 
@@ -793,6 +803,9 @@ public final class Scenes {
                         ensureLoaded(id);
                     } catch (Throwable ignored) {
                     }
+                    handler.post(() -> {
+                        if (parked) dropAllScenes();
+                    });
                 });
             }
         };
@@ -887,9 +900,10 @@ public final class Scenes {
         private static final class LoadedScene {
             final Spec spec;
             long customTs;
-            boolean ownsBg = true;
             Bitmap bg;
             Bitmap fg;
+            /** Small CPU-readable copy of bg: glass backdrops read it, and it is the picture shown on return. */
+            Bitmap preview;
             Bitmap glassBaked;
             Bitmap glassWetBaked;
             BitmapShader glassShader;
@@ -900,12 +914,14 @@ public final class Scenes {
             }
 
             void recycle() {
-                if (ownsBg && bg != null && !bg.isRecycled()) bg.recycle();
+                if (bg != null && !bg.isRecycled()) bg.recycle();
                 if (fg != null && !fg.isRecycled()) fg.recycle();
+                if (preview != null && !preview.isRecycled()) preview.recycle();
                 if (glassBaked != null && !glassBaked.isRecycled()) glassBaked.recycle();
                 if (glassWetBaked != null && !glassWetBaked.isRecycled()) glassWetBaked.recycle();
                 bg = null;
                 fg = null;
+                preview = null;
                 glassBaked = null;
                 glassWetBaked = null;
                 glassShader = null;
@@ -914,12 +930,19 @@ public final class Scenes {
         }
 
         public SceneView(Context c) {
+            this(c, false);
+        }
+
+        private SceneView(Context c, boolean painterOnly) {
             super(c);
-            int[] size = sceneSize(c);
-            renderW = size[0];
-            renderH = size[1];
-            getHolder().setFixedSize(renderW, renderH);
-            getHolder().addCallback(this);
+            parked = painterOnly;
+            if (!painterOnly) {
+                int[] size = sceneSize(c);
+                renderW = size[0];
+                renderH = size[1];
+                getHolder().setFixedSize(renderW, renderH);
+                getHolder().addCallback(this);
+            }
             bmpPaint.setDither(true);
             clockFillPaint.setStyle(Paint.Style.FILL);
             clockWetPaint.setStyle(Paint.Style.FILL);
@@ -933,7 +956,7 @@ public final class Scenes {
 
             datePaint.setTypeface(Ui.font(c, "semibold"));
             greetPaint.setTypeface(Ui.font(c, "semibold"));
-            if (isScenesLook(c)) {
+            if (!painterOnly && isScenesLook(c)) {
                 syncSettings();
             }
         }
@@ -966,6 +989,7 @@ public final class Scenes {
         }
 
         public void syncSettings() {
+            parked = false;
             Context c = getContext();
             List<String> enabled = lockScreenMode ? getEnabledLockSceneIds(c) : getEnabledSceneIds(c);
             activeIds = enabled;
@@ -998,8 +1022,7 @@ public final class Scenes {
                 if (old != null) old.recycle();
             }
             // Coming back to the launcher must not stall on a 4K decode: load off the UI thread if needed.
-            if (isPlainScene(currentId)) cachedOrAsync(currentId);
-            else ensureLoaded(currentId);
+            cachedOrAsync(currentId);
             evictUnusedScenes();
             notifySceneBackdrop();
             scheduleNextRotation();
@@ -1007,19 +1030,27 @@ public final class Scenes {
         }
 
         private String lastSyncSig;
+        private final Object loadLock = new Object();
+        /** True while the launcher is behind another app: nothing may be decoded until it returns. */
+        private volatile boolean parked;
+        private Bitmap returnPreview;
+        private String returnPreviewId;
         private final java.util.Set<String> loading = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-        /** Anything but the user's own custom wallpapers (those re-check their timestamp on every use). */
-        private boolean isPlainScene(String id) {
+        /** Custom wallpapers can be replaced at any time, so they are compared with the file's timestamp. */
+        private boolean isCurrent(String id, LoadedScene ls) {
             String b = baseSceneId(id);
-            return customSlotFromId(b) <= 0 && !LOCK_CUSTOM_ID.equals(b);
+            int slot = customSlotFromId(b);
+            if (slot > 0) return ls.customTs == CustomMedia.getCustomSceneTimestamp(getContext(), slot);
+            if (LOCK_CUSTOM_ID.equals(b)) return ls.customTs == CustomMedia.getCustomLockTimestamp(getContext());
+            return true;
         }
 
         /** The scene if it is already in memory; otherwise null and a background load that redraws when done. */
         private LoadedScene cachedOrAsync(final String id) {
-            if (!isPlainScene(id)) return ensureLoaded(id);
             LoadedScene ls = cache.get(id);
-            if (ls != null && ls.bg != null && !ls.bg.isRecycled()) return ls;
+            if (ls != null && ls.bg != null && !ls.bg.isRecycled() && isCurrent(id, ls)) return ls;
+            if (parked) return null;
             if (loading.add(id)) {
                 prefetcher.execute(() -> {
                     try {
@@ -1028,6 +1059,10 @@ public final class Scenes {
                     } finally {
                         loading.remove(id);
                         handler.post(() -> {
+                            if (parked) {
+                                dropAllScenes();
+                                return;
+                            }
                             lastRenderKey = null;
                             notifySceneBackdrop();
                             invalidate();
@@ -1051,23 +1086,167 @@ public final class Scenes {
             }
         }
 
-        public void releaseCache() {
+        /**
+         * The launcher went behind another app: frees every wallpaper so the app in front gets the memory.
+         * Only the small preview of the current scene stays, so coming back never shows black while the
+         * full image decodes in the background.
+         */
+        public void parkInBackground() {
+            parkInBackground(false);
+        }
+
+        /**
+         * keepCurrent: leave the wallpaper on screen decoded (only the others are freed), so coming back is instant
+         * instead of a ~2 s 4K decode behind a small placeholder. Used unless memory is really short.
+         */
+        public void parkInBackground(boolean keepCurrent) {
+            if (keepCurrent && cache.get(currentId) != null) {
+                stop();
+                parked = true;
+                prefetchId = null;
+                prevId = null;
+                crossfade = 1f;
+                evictUnusedScenes();
+                return;
+            }
             stop();
+            parked = true;
+            LoadedScene cur = cache.get(currentId);
+            if (cur != null && cur.preview != null && !cur.preview.isRecycled()) {
+                if (returnPreview != null && !returnPreview.isRecycled()) returnPreview.recycle();
+                returnPreview = cur.preview;
+                returnPreviewId = currentId;
+                cur.preview = null;
+            }
+            dropAllScenes();
+        }
+
+        /** The dark gradient laid over a scene (stronger at the bottom, under the dock). */
+        static void drawShade(Canvas canvas, Paint p, String specId, int w, int h) {
+            if ("water".equals(specId)) {
+                p.setShader(new LinearGradient(0, 0, 0, h,
+                        new int[]{Color.argb(56, 14, 22, 40), Color.argb(15, 14, 22, 40), Color.argb(128, 0, 0, 0)},
+                        new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP));
+            } else if ("dawn".equals(specId)) {
+                p.setShader(new LinearGradient(0, 0, 0, h,
+                        new int[]{Color.argb(66, 30, 18, 12), Color.argb(20, 30, 18, 12), Color.argb(128, 0, 0, 0)},
+                        new float[]{0f, 0.42f, 1f}, Shader.TileMode.CLAMP));
+            } else {
+                p.setShader(new LinearGradient(0, 0, 0, h,
+                        new int[]{Color.TRANSPARENT, Color.TRANSPARENT, Color.argb(128, 0, 0, 0)},
+                        new float[]{0f, 0.60f, 1f}, Shader.TileMode.CLAMP));
+            }
+            canvas.drawRect(0, 0, w, h, p);
+        }
+
+        /**
+         * The clock and lines above it exactly as the current scene draws them (its own layout and weather), for
+         * the cover shown while coming back from an app. Laid out from another scene they jumped when the cover went.
+         */
+        public void drawCoverClock(Canvas canvas, int w, int h) {
+            LoadedScene cur = cache.get(currentId);
+            if (cur != null && cur.spec != null) {
+                drawClockLayers(canvas, cur, w, h, true, true);
+            } else {
+                drawClockOverlay(canvas, w, h, true, true);
+            }
+        }
+
+        /** Same shade as the current scene, for the cover shown while coming back from an app. */
+        public void drawCoverShade(Canvas canvas, Paint p, int w, int h) {
+            LoadedScene cur = cache.get(currentId);
+            String id = cur != null ? cur.spec.id : baseSceneId(currentId);
+            drawShade(canvas, p, id, w, h);
+        }
+
+        /** True while the launcher is behind another app (wallpapers freed). */
+        public boolean isParked() {
+            return parked;
+        }
+
+        /**
+         * A copy of the small picture kept for coming back, for a cover view drawn by the window itself:
+         * the surface needs a moment to be rebuilt on return and shows black until its first frame.
+         */
+        public Bitmap copyReturnPreview() {
+            Bitmap b = returnPreview;
+            if (b == null || b.isRecycled() || !currentId.equals(returnPreviewId)) {
+                LoadedScene cur = cache.get(currentId);
+                b = cur != null ? cur.preview : null;
+            }
+            if (b == null || b.isRecycled()) return null;
+            try {
+                return b.copy(Bitmap.Config.ARGB_8888, false);
+            } catch (Throwable oom) {
+                return null;
+            }
+        }
+
+        private Runnable onFullFrame;
+        private boolean clockOnOverlay;
+        private Runnable onFrameRendered;
+
+        /**
+         * The home screen draws the clock in a normal view above this surface (drawCoverClock), so coming back from
+         * an app never swaps one clock for another (the 4K surface and the 1080p window anti-alias differently).
+         */
+        public void setClockOnOverlay(boolean on, Runnable frameRendered) {
+            clockOnOverlay = on;
+            onFrameRendered = frameRendered;
+            lastRenderKey = null;
+            invalidate();
+        }
+
+        /** Runs once, on the UI thread, after the next complete frame is on the surface. */
+        public void setOnFullFrame(Runnable r) {
+            onFullFrame = r;
+        }
+
+        /** Under memory pressure while on screen: keep only what is being shown. */
+        public void trimWhileVisible() {
+            prefetchId = null;
+            evictUnusedScenes();
+        }
+
+        private void dropAllScenes() {
             for (LoadedScene ls : cache.values()) {
                 if (ls != null) ls.recycle();
             }
             cache.clear();
+            prefetchId = null;
+            prevId = null;
+            crossfade = 1f;
+            lastNotifiedBg = null;
+            lastRenderKey = null;
+        }
+
+        /** For a view that will not be reused (screensaver): also ends its loader thread. */
+        public void destroy() {
+            parked = true;   // a queued redraw must not start a load on the executor shut down below
+            releaseCache();
+            if (overlayScene != null) {
+                overlayScene.recycle();
+                overlayScene = null;
+            }
+            prefetcher.shutdownNow();
+        }
+
+        public void releaseCache() {
+            stop();
+            dropAllScenes();
+            if (returnPreview != null && !returnPreview.isRecycled()) returnPreview.recycle();
+            returnPreview = null;
+            returnPreviewId = null;
             if (cachedFrameBmp != null && !cachedFrameBmp.isRecycled()) {
                 cachedFrameBmp.recycle();
             }
             cachedFrameBmp = null;
             cachedFrameKey = null;
-            lastNotifiedBg = null;
         }
 
         public Bitmap getCurrentBgBitmap() {
             LoadedScene ls = cachedOrAsync(currentId);
-            return ls != null ? ls.bg : null;
+            return ls == null ? null : ls.preview != null ? ls.preview : ls.bg;
         }
 
         private void notifySceneBackdrop() {
@@ -1075,12 +1254,13 @@ public final class Scenes {
                 LoadedScene ls = cache.get(currentId);
                 if (ls != null && ls.bg != null && ls.bg != lastNotifiedBg) {
                     lastNotifiedBg = ls.bg;
-                    listener.onSceneChanged(ls.bg);
+                    listener.onSceneChanged(ls.preview != null ? ls.preview : ls.bg);
                 }
             }
         }
 
         public void start() {
+            parked = false;
             handler.removeCallbacks(clockTick);
             handler.post(clockTick);
             scheduleNextRotation();
@@ -1090,7 +1270,32 @@ public final class Scenes {
             handler.removeCallbacks(clockTick);
             handler.removeCallbacks(rotateTick);
             handler.removeCallbacks(prefetchTick);
-            if (fadeAnim != null) fadeAnim.cancel();
+            finishCrossfade();
+        }
+
+        /**
+         * Ends a running wallpaper crossfade at the new picture. Cancelling it halfway (another app opened, the
+         * screensaver started) used to leave both pictures blended at half strength until the next rotation.
+         */
+        private void finishCrossfade() {
+            if (fadeAnim != null) {
+                fadeAnim.cancel();
+                fadeAnim = null;
+            }
+            if (prevId != null || crossfade < 1f) {
+                crossfade = 1f;
+                prevId = null;
+                lastRenderKey = null;
+                evictUnusedScenes();
+            }
+        }
+
+        /** Goes to the next wallpaper now (the home screen's button). False when only one is selected. */
+        public boolean nextScene() {
+            if (!canRotate()) return false;
+            handler.removeCallbacks(rotateTick);
+            advanceScene();
+            return true;
         }
 
         private boolean canRotate() {
@@ -1131,7 +1336,7 @@ public final class Scenes {
             prefetchId = null;
             notifySceneBackdrop();
 
-            if (fadeAnim != null) fadeAnim.cancel();
+            finishCrossfade();
             crossfade = 0f;
             fadeAnim = ValueAnimator.ofFloat(0f, 1f);
             fadeAnim.setDuration(1600L);
@@ -1147,7 +1352,46 @@ public final class Scenes {
             scheduleNextRotation();
         }
 
+        /** Decodes one scene at a time: the UI thread and the prefetcher never decode the same 4K image twice. */
         private LoadedScene ensureLoaded(String id) {
+            synchronized (loadLock) {
+                return ensureLoadedLocked(id);
+            }
+        }
+
+        private void publish(String id, LoadedScene ls) {
+            ls.preview = previewOf(ls.bg);
+            if (ls.preview != null) ls.bg = toGpu(ls.bg);
+            ls.fg = toGpu(ls.fg);
+            cache.put(id, ls);
+        }
+
+        private static Bitmap previewOf(Bitmap bg) {
+            if (bg == null) return null;
+            try {
+                return Bitmap.createScaledBitmap(bg, 1280, 720, true);
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+
+        /**
+         * A normal bitmap exists twice once drawn: in app memory and as a GPU texture. The scene is only ever
+         * drawn on a hardware canvas, so a hardware bitmap (one copy, GPU only) saves a full image per scene.
+         */
+        private static Bitmap toGpu(Bitmap b) {
+            if (b == null || android.os.Build.VERSION.SDK_INT < 26 || b.getConfig() == Bitmap.Config.HARDWARE) return b;
+            try {
+                Bitmap gpu = b.copy(Bitmap.Config.HARDWARE, false);
+                if (gpu == null) return b;
+                b.recycle();
+                return gpu;
+            } catch (Throwable t) {
+                return b;
+            }
+        }
+
+        private LoadedScene ensureLoadedLocked(String id) {
             Context c = getContext();
             LoadedScene ls = cache.get(id);
             String base = baseSceneId(id);
@@ -1160,14 +1404,12 @@ public final class Scenes {
                 if (ls != null) ls.recycle();
                 ls = new LoadedScene(CUSTOM_SPECS[cSlot - 1]);
                 ls.customTs = ts;
-                ls.ownsBg = false;
                 ls.bg = CustomMedia.getCustomSceneWallpaper(c, cSlot, renderW, renderH);
                 if (ls.bg == null) {
-                    ls.ownsBg = true;
                     ls.bg = loadAssetBitmap(c, ALL[0].bgAsset, 1920, 1080);
                 }
                 bakeLoadedGlassFromBg(ls, false);
-                cache.put(id, ls);
+                publish(id, ls);
                 return ls;
             }
             if (LOCK_CUSTOM_ID.equals(base)) {
@@ -1178,14 +1420,12 @@ public final class Scenes {
                 if (ls != null) ls.recycle();
                 ls = new LoadedScene(LOCK_CUSTOM_SPEC);
                 ls.customTs = ts;
-                ls.ownsBg = false;
                 ls.bg = CustomMedia.getCustomLockWallpaper(c, renderW, renderH);
                 if (ls.bg == null) {
-                    ls.ownsBg = true;
                     ls.bg = loadAssetBitmap(c, ALL[0].bgAsset, 1920, 1080);
                 }
                 bakeLoadedGlassFromBg(ls, false);
-                cache.put(id, ls);
+                publish(id, ls);
                 return ls;
             }
             if (FOLDER_SHUFFLE_ID.equals(base) || LOCK_FOLDER_SHUFFLE_ID.equals(base)) {
@@ -1198,13 +1438,12 @@ public final class Scenes {
                 Spec spec = LOCK_FOLDER_SHUFFLE_ID.equals(base) ? LOCK_FOLDER_SHUFFLE_SPEC : FOLDER_SHUFFLE_SPEC;
                 ls = new LoadedScene(spec);
                 ls.customTs = System.currentTimeMillis();
-                ls.ownsBg = true;
                 ls.bg = CustomMedia.getNextShuffledFolderBitmap(c, scope, renderW, renderH, true);
                 if (ls.bg == null) {
                     ls.bg = loadAssetBitmap(c, ALL[0].bgAsset, 1920, 1080);
                 }
                 bakeLoadedGlassFromBg(ls, false);
-                cache.put(id, ls);
+                publish(id, ls);
                 return ls;
             }
             if (ls != null && ls.bg != null && !ls.bg.isRecycled()) return ls;
@@ -1232,7 +1471,7 @@ public final class Scenes {
             } else {
                 bakeLoadedGlassFromBg(ls, spec.darkClock);
             }
-            cache.put(id, ls);
+            publish(id, ls);
             return ls;
         }
 
@@ -1352,7 +1591,10 @@ public final class Scenes {
             String key = fading ? null : stillFrameKey();
             if (key != null && key.equals(lastRenderKey)) return;
             // Not decoded yet: keep the last picture on the surface instead of drawing black while it loads.
-            if (cachedOrAsync(currentId) == null || (fading && cachedOrAsync(prevId) == null)) return;
+            if (cachedOrAsync(currentId) == null || (fading && cachedOrAsync(prevId) == null)) {
+                drawReturnPreview();
+                return;
+            }
             SurfaceHolder holder = getHolder();
             Canvas canvas = null;
             try {
@@ -1364,6 +1606,35 @@ public final class Scenes {
                 canvas.drawColor(Color.BLACK);
                 renderFrame(canvas, renderW, renderH);
                 lastRenderKey = key;
+            } finally {
+                holder.unlockCanvasAndPost(canvas);
+            }
+            if (onFrameRendered != null) onFrameRendered.run();
+            if (onFullFrame != null) {
+                Runnable r = onFullFrame;
+                onFullFrame = null;
+                // One more vsync so the posted buffer is actually on screen before the cover goes.
+                postDelayed(r, 32);
+            }
+            if (returnPreview != null) {
+                returnPreview.recycle();
+                returnPreview = null;
+                returnPreviewId = null;
+            }
+        }
+
+        /** Back from another app and the wallpaper is still decoding: show its small copy instead of black. */
+        private void drawReturnPreview() {
+            if (returnPreview == null || returnPreview.isRecycled() || !currentId.equals(returnPreviewId)) return;
+            SurfaceHolder holder = getHolder();
+            Canvas canvas = null;
+            try {
+                canvas = android.os.Build.VERSION.SDK_INT >= 26 ? holder.lockHardwareCanvas() : holder.lockCanvas();
+            } catch (Throwable ignored) {
+            }
+            if (canvas == null) return;
+            try {
+                drawCenterCrop(canvas, returnPreview, renderW, renderH);
             } finally {
                 holder.unlockCanvasAndPost(canvas);
             }
@@ -1402,21 +1673,18 @@ public final class Scenes {
 
             // 2. Scene shade gradient
             Spec sp = ls.spec;
-            if ("water".equals(sp.id)) {
-                shadePaint.setShader(new LinearGradient(0, 0, 0, h,
-                        new int[]{Color.argb(56, 14, 22, 40), Color.argb(15, 14, 22, 40), Color.argb(128, 0, 0, 0)},
-                        new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP));
-            } else if ("dawn".equals(sp.id)) {
-                shadePaint.setShader(new LinearGradient(0, 0, 0, h,
-                        new int[]{Color.argb(66, 30, 18, 12), Color.argb(20, 30, 18, 12), Color.argb(128, 0, 0, 0)},
-                        new float[]{0f, 0.42f, 1f}, Shader.TileMode.CLAMP));
-            } else {
-                shadePaint.setShader(new LinearGradient(0, 0, 0, h,
-                        new int[]{Color.TRANSPARENT, Color.TRANSPARENT, Color.argb(128, 0, 0, 0)},
-                        new float[]{0f, 0.60f, 1f}, Shader.TileMode.CLAMP));
-            }
-            canvas.drawRect(0, 0, w, h, shadePaint);
+            drawShade(canvas, shadePaint, sp.id, w, h);
 
+            if (!clockOnOverlay) drawClockLayers(canvas, ls, w, h, true, true);
+
+            if (layerSave) {
+                canvas.restore();
+            }
+        }
+
+        /** The home screen clock and the lines above it. The screensaver draws the same thing over its video. */
+        private void drawClockLayers(Canvas canvas, LoadedScene ls, int w, int h, boolean showClock, boolean showHeader) {
+            Spec sp = ls.spec;
             // 3. Giant Glass Clock (iPhone Duo / Rounded / Tall Glass)
             float u = Math.min(w / 960f, h / 540f);
             Context ctx = getContext();
@@ -1577,7 +1845,9 @@ public final class Scenes {
                 clockWetPaint.setColor(white);
             }
 
-            if (sp.waterSplit) {
+            if (!showClock) {
+                // header only
+            } else if (sp.waterSplit) {
                 float waterY = h * 0.55f;
                 // Above waterline: sharp glass clock
                 canvas.save();
@@ -1607,6 +1877,8 @@ public final class Scenes {
             if (ls.fg != null) {
                 drawCenterCrop(canvas, ls.fg, w, h);
             }
+
+            if (!showHeader) return;
 
             // 5. Line 1 (Greeting with person name) + Line 2 (Date & Weather) above the clock
             String greeting = buildGreeting(ctx);
@@ -1664,10 +1936,41 @@ public final class Scenes {
                 dateX = sp.leftAlign ? (sp.dateLeftU * u) : ((w - dateW) * 0.5f);
             }
             canvas.drawText(fullHeader, dateX, dateBaselineY, datePaint);
+        }
 
-            if (layerSave) {
-                canvas.restore();
+        private LoadedScene overlayScene;
+
+        /** Draws only the clock layers on a transparent canvas, laid out like the first enabled home scene. */
+        public void drawClockOverlay(Canvas canvas, int w, int h, boolean showClock, boolean showHeader) {
+            if (overlayScene == null) {
+                List<String> ids = getEnabledSceneIds(getContext());
+                String base = baseSceneId(ids.isEmpty() ? "night" : ids.get(0));
+                int slot = customSlotFromId(base);
+                Spec spec = slot > 0 ? CUSTOM_SPECS[slot - 1]
+                        : FOLDER_SHUFFLE_ID.equals(base) ? FOLDER_SHUFFLE_SPEC : byId(base);
+                LoadedScene ls = new LoadedScene(spec);
+                // A "glass" clock needs something to refract: a still warm tone instead of the moving video.
+                Bitmap tone = Bitmap.createBitmap(16, 9, Bitmap.Config.ARGB_8888);
+                tone.eraseColor(0xFF6A3218);
+                ls.glassBaked = bakeGlassTexture(tone, spec.darkClock, false);
+                ls.glassShader = new BitmapShader(ls.glassBaked, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                ls.glassWetBaked = bakeGlassTexture(tone, false, true);
+                ls.glassWetShader = new BitmapShader(ls.glassWetBaked, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                tone.recycle();
+                overlayScene = ls;
             }
+            drawClockLayers(canvas, overlayScene, w, h, showClock, showHeader);
+        }
+
+        /** Same text the home clock would draw now; tells the overlay when it has to redraw. */
+        public String clockSignature() {
+            Context c = getContext();
+            return formatTime(c) + "|" + buildGreeting(c) + "|" + I18n.formatSceneDate(c, new Date()) + "|" + clockLookKey(c);
+        }
+
+        /** Never shown: only lends the home screen's clock drawing to a normal view, with no surface or wallpaper. */
+        public static SceneView clockPainter(Context c) {
+            return new SceneView(c, true);
         }
 
         private static String buildGreeting(Context c) {
@@ -1778,6 +2081,37 @@ public final class Scenes {
          * Renders the clock in iPhone Duo (frosted translucent glass slab + crisp specular rim matching duo.png),
          * iPhone Rounded, or Tall Glass style, with solid circular frosted-glass colon dots.
          */
+        /**
+         * How much to shave off the numerals' edges, in pixels. Below the normal weight the fonts cannot get any
+         * thinner (Bahnschrift stops at 300, Antonio Light has one weight), so the outline is eroded instead.
+         */
+        private float clockErode(float clockPx) {
+            float wt = getClockWeight(getContext());
+            if (wt >= CLOCK_WEIGHT_DEFAULT) return 0f;
+            return (CLOCK_WEIGHT_DEFAULT - wt) / CLOCK_WEIGHT_DEFAULT * 0.032f * clockPx;
+        }
+
+        private TextPaint erodeP;
+
+        /** Paint that erases a band of the given width along the outline (inside a saveLayer). */
+        private Paint erodePaint(TextPaint like, float erode) {
+            if (erodeP == null) {
+                erodeP = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+                erodeP.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT));
+                erodeP.setStyle(Paint.Style.STROKE);
+                erodeP.setStrokeJoin(Paint.Join.ROUND);
+                erodeP.setColor(Color.BLACK);
+            }
+            erodeP.setTypeface(like.getTypeface());
+            erodeP.setTextSize(like.getTextSize());
+            erodeP.setLetterSpacing(like.getLetterSpacing());
+            erodeP.setTextScaleX(like.getTextScaleX());
+            if (android.os.Build.VERSION.SDK_INT >= 26) erodeP.setFontVariationSettings(like.getFontVariationSettings());
+            erodeP.setPathEffect(like.getPathEffect());
+            erodeP.setStrokeWidth(erode * 2f);
+            return erodeP;
+        }
+
         private void drawStylizedClock(Canvas canvas, String timeStr, float startX, float baselineY,
                                        float scaleY, float rawCapH, float clockPx, float u,
                                        boolean isDuo, boolean isRounded, boolean wet,
@@ -1807,7 +2141,9 @@ public final class Scenes {
                 duoClockPath.addCircle(colonCx, dotY1, dotR, android.graphics.Path.Direction.CW);
                 duoClockPath.addCircle(colonCx, dotY2, dotR, android.graphics.Path.Direction.CW);
 
-                if (!wet) {
+                float erode = clockErode(clockPx);
+                int layer = erode > 0f ? canvas.saveLayer(null, null) : -1;
+                if (!wet && erode <= 0f) {
                     clockShadowPaint.setAlpha(38);
                     canvas.save();
                     canvas.translate(0f, 3f * u);
@@ -1825,6 +2161,10 @@ public final class Scenes {
                     clockFrostPaint.setAlpha(opa(wet ? 120 : 235));
                     canvas.drawPath(duoClockPath, clockFrostPaint);
                 }
+                if (layer >= 0) {
+                    canvas.drawPath(duoClockPath, erodePaint(fillP, erode));
+                    canvas.restoreToCount(layer);
+                }
                 return;
             }
 
@@ -1835,13 +2175,21 @@ public final class Scenes {
 
             if (colonIdx < 0) {
                 // Tall Glass mode
-                if (!wet) {
+                float erode = clockErode(clockPx);
+                int layer = erode > 0f ? canvas.saveLayer(null, null) : -1;
+                if (!wet && erode <= 0f) {
                     canvas.drawText(timeStr, startX, baselineY + 4f * u, clockShadowPaint);
                 }
                 fillP.setAlpha(opa(wet ? 158 : 255));
                 canvas.drawText(timeStr, startX, baselineY, fillP);
-                clockStrokePaint.setAlpha(opa(wet ? 60 : 140));
-                canvas.drawText(timeStr, startX, baselineY, clockStrokePaint);
+                if (erode <= 0f) {
+                    clockStrokePaint.setAlpha(opa(wet ? 60 : 140));
+                    canvas.drawText(timeStr, startX, baselineY, clockStrokePaint);
+                }
+                if (layer >= 0) {
+                    canvas.drawText(timeStr, startX, baselineY, erodePaint(fillP, erode));
+                    canvas.restoreToCount(layer);
+                }
                 canvas.restore();
                 return;
             }

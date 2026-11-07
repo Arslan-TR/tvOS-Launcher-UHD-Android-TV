@@ -226,6 +226,17 @@ public class MainActivity extends Activity {
     View launchTile;
     static MainActivity activeInstance;
     SceneHome sceneHome;
+    /** Open "Edit Home Screen" panel, or null. It takes every key while open. */
+    HomeEditor homeEditor;
+
+    /**
+     * Intent for this launcher's home screen. Always MAIN + HOME, so every start lands in the one home task:
+     * a plain explicit start made a second MainActivity in a normal task, and Home then created yet another one
+     * that had to decode the wallpaper from scratch (a black second when coming back from an app).
+     */
+    public static Intent homeIntent(android.content.Context c) {
+        return new Intent(c, MainActivity.class).setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+    }
     String activeLang;
     String activeLook;
 
@@ -310,7 +321,7 @@ public class MainActivity extends Activity {
                 if (resumed) {
                     showProfilePicker(true);
                 } else {
-                    startActivity(new Intent(c, MainActivity.class).putExtra("pick_profile", true)
+                    startActivity(MainActivity.homeIntent(c).putExtra("pick_profile", true)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                 }
             }
@@ -447,6 +458,7 @@ public class MainActivity extends Activity {
         MediaWatchService.ensureSessionTracking(this);
         if (sceneHome != null) sceneHome.onWatchPopupsResume();
         if (Scenes.isScenesLook(this) && sceneHome != null) {
+            sceneHome.showReturnCover();
             sceneHome.sceneView.syncSettings();
             sceneHome.sceneView.start();
             sceneHome.refreshWhoBar();
@@ -533,6 +545,8 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         resumed = false;
+        if (homeEditor != null) homeEditor.close();
+        if (sceneHome != null && Scenes.isScenesLook(this)) sceneHome.captureReturnCover();
         if (ambientShowcase && (android.os.SystemClock.uptimeMillis() - ambientEnterTime > 1000L)) {
             exitAmbientShowcase();
         }
@@ -559,8 +573,18 @@ public class MainActivity extends Activity {
                 sceneHome.sceneView.releaseCache();
             }
         }
-        if (level >= TRIM_MEMORY_BACKGROUND && !resumed && sceneHome != null) {
-            sceneHome.sceneView.releaseCache();
+        if (sceneHome == null || !Scenes.isScenesLook(this)) return;
+        if (level >= TRIM_MEMORY_UI_HIDDEN && !resumed) {
+            // Behind YouTube etc.: give the wallpapers' memory to the app in front right away.
+            // Keep the wallpaper on screen decoded unless memory is really short, so coming back is instant.
+            boolean keep = level < TRIM_MEMORY_MODERATE && !Scenes.isLowMemoryMode(this);
+            sceneHome.sceneView.parkInBackground(keep);
+            sceneHome.trimCaches();
+            RemoteServer.trim();
+        } else if (level >= TRIM_MEMORY_RUNNING_LOW) {
+            sceneHome.sceneView.trimWhileVisible();
+            sceneHome.trimCaches();
+            RemoteServer.trim();
         }
     }
 
@@ -576,6 +600,7 @@ public class MainActivity extends Activity {
             }
         }
         if (wakeReceiver != null) unregisterReceiver(wakeReceiver);
+        if (sceneHome != null) sceneHome.sceneView.destroy();
         handler.removeCallbacksAndMessages(null);
     }
 
@@ -3212,6 +3237,7 @@ public class MainActivity extends Activity {
         if (search != null && pickerLayer == search.layer && menuLayer == null) {
             return search.dispatch(ev) || super.dispatchKeyEvent(ev);
         }
+        if (homeEditor != null && pickerLayer == null && menuLayer == null && homeEditor.dispatch(ev)) return true;
         if (pickerLayer == null && menuLayer == null && moveIndex < 0 && keyboardSearch(ev)) return true;
         if (pickerLayer == null && menuLayer == null && moveIndex < 0 && holdBackSearch(ev)) return true;
         if (ev.getKeyCode() == KeyEvent.KEYCODE_SEARCH && pickerLayer == null && menuLayer == null && moveIndex < 0) {
@@ -3813,7 +3839,11 @@ public class MainActivity extends Activity {
                 () -> {
                     closeProfilePicker();
                     showSearch(null);
-                });
+                },
+                Scenes.isScenesLook(this) && sceneHome != null ? () -> {
+                    closeProfilePicker();
+                    HomeEditor.open(this);
+                } : null);
 
         FrameLayout.LayoutParams plp = (FrameLayout.LayoutParams) panel.getLayoutParams();
         plp.gravity = Gravity.TOP | Gravity.END;
@@ -4352,7 +4382,7 @@ public class MainActivity extends Activity {
             return;
         }
         try {
-            Intent i = new Intent(c, MainActivity.class)
+            Intent i = MainActivity.homeIntent(c)
                     .putExtra("panel", "ambient")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             c.startActivity(i);
@@ -4366,7 +4396,7 @@ public class MainActivity extends Activity {
             return;
         }
         try {
-            Intent i = new Intent(c, MainActivity.class)
+            Intent i = MainActivity.homeIntent(c)
                     .putExtra("panel", "lock")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             c.startActivity(i);

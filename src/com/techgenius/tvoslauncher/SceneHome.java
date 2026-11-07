@@ -60,6 +60,88 @@ final class SceneHome {
     LinearLayout remoteBtn;
     ImageView weatherIcon;
     LinearLayout moonBtn;
+    LinearLayout nextWallBtn;
+    /** Covers the black gap while the wallpaper surface is rebuilt after coming back from an app. */
+    private ImageView returnCover;
+    private View coverClock;
+    private long coverShownAt;
+    private final android.graphics.Paint coverShadePaint = new android.graphics.Paint();
+    private final Runnable hideCoverFallback = this::hideReturnCover;
+
+    /** Shared by every SceneHome: Home can bring up a fresh MainActivity that has no wallpaper decoded yet. */
+    private static android.graphics.Bitmap coverBmp;
+
+    /** Call when the launcher goes behind another app: keeps a small copy of the wallpaper for coming back. */
+    void captureReturnCover() {
+        if (returnCover == null) return;
+        android.graphics.Bitmap b = sceneView.copyReturnPreview();
+        if (b == null) return;
+        if (coverBmp != null && !coverBmp.isRecycled()) coverBmp.recycle();
+        coverBmp = b;
+    }
+
+    /** Call before the launcher becomes visible again: shows the small wallpaper copy until the surface draws. */
+    void showReturnCover() {
+        if (returnCover == null) return;
+        android.graphics.Bitmap b = coverBmp;
+        coverBmp = null;
+        if (b == null || b.isRecycled()) b = sceneView.copyReturnPreview();
+        if (b == null) return;
+        returnCover.animate().cancel();
+        returnCover.setImageBitmap(b);
+        returnCover.setAlpha(1f);
+        returnCover.setVisibility(View.VISIBLE);
+        coverShownAt = android.os.SystemClock.uptimeMillis();
+        coverClock.invalidate();
+        // The first frame on the rebuilt surface reaches the screen a moment after it is posted on this TV:
+        // keep the cover a little longer than that.
+        sceneView.setOnFullFrame(() -> {
+            returnCover.removeCallbacks(hideCoverFallback);
+            long sinceShow = android.os.SystemClock.uptimeMillis() - coverShownAt;
+            returnCover.postDelayed(hideCoverFallback, Math.max(300, 400 - sinceShow));
+        });
+        returnCover.removeCallbacks(hideCoverFallback);
+        returnCover.postDelayed(hideCoverFallback, 3500);
+    }
+
+    private void hideReturnCover() {
+        if (returnCover == null || returnCover.getVisibility() != View.VISIBLE) return;
+        returnCover.removeCallbacks(hideCoverFallback);
+        sceneView.setOnFullFrame(null);
+        // Gone in one frame, picture, shade and clock together: the surface underneath shows the same scene,
+        // shade and clock, so a single swap is invisible. Fading stacked both shades and both clock shadows.
+        returnCover.setVisibility(View.GONE);
+        android.graphics.drawable.Drawable d = returnCover.getDrawable();
+        returnCover.setImageDrawable(null);
+        if (d instanceof android.graphics.drawable.BitmapDrawable) {
+            final android.graphics.Bitmap bm = ((android.graphics.drawable.BitmapDrawable) d).getBitmap();
+            // Freed a little later: the frame already queued for the screen may still be drawing it.
+            returnCover.postDelayed(() -> {
+                if (bm != null && !bm.isRecycled() && returnCover.getDrawable() == null) bm.recycle();
+            }, 600);
+        }
+    }
+
+    /** Round buttons in the top-right corner (remote, next wallpaper, weather, control center). */
+    static final int TOP_BTN_DEFAULT_DP = 34, TOP_BTN_MIN_DP = 24, TOP_BTN_MAX_DP = 48, TOP_GAP_DP = 8;
+    private int topBtnDp = TOP_BTN_DEFAULT_DP, topIconDp = 16;
+    private LinearLayout topRightRow;
+
+    static int topButtonDp(android.content.Context c) {
+        int v = Profiles.homePrefs(c).getInt("top_btn_dp", TOP_BTN_DEFAULT_DP);
+        return Math.max(TOP_BTN_MIN_DP, Math.min(TOP_BTN_MAX_DP, v));
+    }
+
+    static void setTopButtonDp(android.content.Context c, int v) {
+        Profiles.homePrefs(c).edit()
+                .putInt("top_btn_dp", Math.max(TOP_BTN_MIN_DP, Math.min(TOP_BTN_MAX_DP, v))).apply();
+    }
+
+    /** Builds the top-right buttons again (after their size changed in the home editor). */
+    void rebuildTopBar() {
+        if (topRightRow != null) overlay.removeView(topRightRow);
+        buildTopBar();
+    }
     ImageView moonIcon;
     TextView moonText;
 
@@ -127,7 +209,12 @@ final class SceneHome {
         this.sceneView.setOnSceneChangedListener(bg -> {
             if (bg != null && Scenes.isScenesLook(host)) {
                 host.io.execute(() -> {
-                    Bitmap blurred = Ui.glassBackdrop(bg, 192, 108);
+                    Bitmap blurred;
+                    try {
+                        blurred = Ui.glassBackdrop(bg, 192, 108);
+                    } catch (Throwable recycledMeanwhile) {
+                        return;
+                    }
                     host.handler.post(() -> {
                         if (blurred != null && Scenes.isScenesLook(host)) {
                             blendGlassTo(blurred);
@@ -140,6 +227,29 @@ final class SceneHome {
         this.overlay = new FrameLayout(host);
         this.overlay.setClipChildren(false);
         this.overlay.setClipToPadding(false);
+        returnCover = new ImageView(host) {
+            @Override
+            protected void onDraw(android.graphics.Canvas c) {
+                super.onDraw(c);
+                // The scene's dark gradient belongs to the picture, so it is there from the first frame.
+                sceneView.drawCoverShade(c, coverShadePaint, getWidth(), getHeight());
+            }
+        };
+        returnCover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        returnCover.setVisibility(View.GONE);
+        this.overlay.addView(returnCover, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // The clock and date are drawn on the wallpaper surface; draw the same ones over the cover so they show at once.
+        coverClock = new View(host) {
+            @Override
+            protected void onDraw(android.graphics.Canvas c) {
+                sceneView.drawCoverClock(c, getWidth(), getHeight());
+            }
+        };
+        this.overlay.addView(coverClock, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // The clock always lives in this view (not on the wallpaper surface): nothing to swap when coming back.
+        sceneView.setClockOnOverlay(true, coverClock::invalidate);
 
         // Phone remote is reachable as soon as the launcher runs (the token is stable, no QR needed each time).
         host.io.execute(() -> RemoteServer.get(host));
@@ -187,6 +297,16 @@ final class SceneHome {
             } else {
                 shelfBox.setAlpha(1f);
                 shelfBox.setTranslationY(0f);
+            }
+        }
+    }
+
+    /** Frees what can be fetched again from the disk cache; called when memory is needed elsewhere. */
+    void trimCaches() {
+        shelfThumbs.evictAll();
+        for (List<WatchCardData> cards : pkgWatchCache.values()) {
+            for (WatchCardData c : cards) {
+                if (c.backdropUrl != null && !c.backdropUrl.isEmpty()) c.thumb = null;
             }
         }
     }
@@ -277,6 +397,7 @@ final class SceneHome {
         if (whoBar != null) whoBar.invalidate();
         if (remoteBtn != null) remoteBtn.invalidate();
         if (weatherBtn != null) weatherBtn.invalidate();
+        if (nextWallBtn != null) nextWallBtn.invalidate();
         if (moonBtn != null) moonBtn.invalidate();
         if (dockBox != null) dockBox.invalidate();
         for (View c : shelfCards) c.invalidate();
@@ -290,7 +411,9 @@ final class SceneHome {
     // ---------------------------------------------------------------- Top Bar (Profile pill & Control Panel in top-right)
 
     private void buildTopBar() {
-        LinearLayout topRightRow = new LinearLayout(host);
+        topBtnDp = topButtonDp(host);
+        topIconDp = Math.round(topBtnDp * 16f / 34f);
+        topRightRow = new LinearLayout(host);
         topRightRow.setOrientation(LinearLayout.HORIZONTAL);
         topRightRow.setGravity(Gravity.CENTER_VERTICAL);
         topRightRow.setClipChildren(false);
@@ -350,12 +473,12 @@ final class SceneHome {
 
         LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        wlp.rightMargin = dp(10);
+        wlp.rightMargin = dp(TOP_GAP_DP);
         topRightRow.addView(whoBar, wlp);
         refreshWhoBar();
 
         // Top-right Phone Remote shortcut (opens a QR code; the phone becomes the remote)
-        int rSize = dp(42);
+        int rSize = dp(topBtnDp);
         remoteBtn = new LinearLayout(host);
         remoteBtn.setOrientation(LinearLayout.HORIZONTAL);
         remoteBtn.setGravity(Gravity.CENTER);
@@ -367,8 +490,8 @@ final class SceneHome {
         remoteBtn.setFocusable(true);
         remoteBtn.setClickable(true);
         ImageView remoteIcon = new ImageView(host);
-        remoteIcon.setImageBitmap(Glyphs.get("remote", dp(19), 0xFFF4F4F6));
-        remoteBtn.addView(remoteIcon, new LinearLayout.LayoutParams(dp(19), dp(19)));
+        remoteIcon.setImageBitmap(Glyphs.get("remote", dp(topIconDp), 0xFFF4F4F6));
+        remoteBtn.addView(remoteIcon, new LinearLayout.LayoutParams(dp(topIconDp), dp(topIconDp)));
         GradientDrawable remoteFocusRing = new GradientDrawable();
         remoteFocusRing.setCornerRadius(rSize / 2f);
         remoteFocusRing.setColor(Color.TRANSPARENT);
@@ -380,11 +503,11 @@ final class SceneHome {
         });
         remoteBtn.setOnClickListener(v -> showRemoteSheet(v));
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(rSize, rSize);
-        rlp.rightMargin = dp(10);
+        rlp.rightMargin = dp(TOP_GAP_DP);
         topRightRow.addView(remoteBtn, rlp);
 
         // Top-right Weather Shortcut Button (icon only; opens 5-day forecast UI like Classic Home)
-        int mSize = dp(42);
+        int mSize = dp(topBtnDp);
         weatherBtn = new LinearLayout(host);
         weatherBtn.setOrientation(LinearLayout.HORIZONTAL);
         weatherBtn.setGravity(Gravity.CENTER);
@@ -398,8 +521,8 @@ final class SceneHome {
         weatherBtn.setLongClickable(true);
 
         weatherIcon = new ImageView(host);
-        weatherIcon.setImageBitmap(Glyphs.get("cloud", dp(19), 0xFFF4F4F6));
-        weatherBtn.addView(weatherIcon, new LinearLayout.LayoutParams(dp(19), dp(19)));
+        weatherIcon.setImageBitmap(Glyphs.get("cloud", dp(topIconDp), 0xFFF4F4F6));
+        weatherBtn.addView(weatherIcon, new LinearLayout.LayoutParams(dp(topIconDp), dp(topIconDp)));
 
         GradientDrawable weatherFocusRing = new GradientDrawable();
         weatherFocusRing.setCornerRadius(mSize / 2f);
@@ -418,9 +541,42 @@ final class SceneHome {
         });
 
         LinearLayout.LayoutParams wxlp = new LinearLayout.LayoutParams(mSize, mSize);
-        wxlp.rightMargin = dp(10);
+        wxlp.rightMargin = dp(TOP_GAP_DP);
         topRightRow.addView(weatherBtn, wxlp);
         refreshWeatherBtn();
+
+        // Top-right Next Wallpaper Button (skips to the next scene / folder picture right away)
+        nextWallBtn = new LinearLayout(host);
+        nextWallBtn.setOrientation(LinearLayout.HORIZONTAL);
+        nextWallBtn.setGravity(Gravity.CENTER);
+        MainActivity.LiquidGlass nextGlass = new MainActivity.LiquidGlass(
+                mSize / 2f, 0x6614161C, host.glassSource, host.screenW, host.screenH, host.unit);
+        nextGlass.lens = dp(5);
+        nextGlass.rimStrength = 0.45f;
+        nextWallBtn.setBackground(nextGlass);
+        nextWallBtn.setFocusable(true);
+        nextWallBtn.setClickable(true);
+        ImageView nextIcon = new ImageView(host);
+        nextIcon.setImageBitmap(Glyphs.get("scene", dp(topIconDp), 0xFFF4F4F6));
+        nextWallBtn.addView(nextIcon, new LinearLayout.LayoutParams(dp(topIconDp), dp(topIconDp)));
+        GradientDrawable nextFocusRing = new GradientDrawable();
+        nextFocusRing.setCornerRadius(mSize / 2f);
+        nextFocusRing.setColor(Color.TRANSPARENT);
+        nextFocusRing.setStroke(dp(2), Color.WHITE);
+        nextWallBtn.setOnFocusChangeListener((v, has) -> {
+            v.setForeground(has ? nextFocusRing : null);
+            v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f)
+                    .setDuration(180).setInterpolator(MainActivity.LIFT).start();
+        });
+        nextWallBtn.setOnClickListener(v -> {
+            if (!sceneView.nextScene()) {
+                android.widget.Toast.makeText(host, I18n.s(host, "Only one wallpaper is selected",
+                        "Yalnızca bir duvar kâğıdı seçili"), android.widget.Toast.LENGTH_SHORT).show();
+            }
+        });
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(mSize, mSize);
+        nlp.rightMargin = dp(TOP_GAP_DP);
+        topRightRow.addView(nextWallBtn, nlp);
 
         // Top-right Control Panel Button
         moonBtn = new LinearLayout(host);
@@ -436,8 +592,8 @@ final class SceneHome {
         moonBtn.setLongClickable(true);
 
         moonIcon = new ImageView(host);
-        moonIcon.setImageBitmap(Glyphs.get("controls", dp(19), 0xFFF4F4F6));
-        moonBtn.addView(moonIcon, new LinearLayout.LayoutParams(dp(19), dp(19)));
+        moonIcon.setImageBitmap(Glyphs.get("controls", dp(topIconDp), 0xFFF4F4F6));
+        moonBtn.addView(moonIcon, new LinearLayout.LayoutParams(dp(topIconDp), dp(topIconDp)));
 
         moonText = new TextView(host);
         Ui.textSize(moonText, 11f);
@@ -520,14 +676,14 @@ final class SceneHome {
     void refreshMoonBtn() {
         if (moonBtn == null) return;
         int left = SleepReceiver.timerLeft(host);
-        int mSize = dp(42);
+        int mSize = dp(topBtnDp);
         if (left > 0) {
             moonText.setText(left + I18n.s(host, "m", " dk"));
             moonText.setVisibility(View.VISIBLE);
-            moonBtn.setPadding(dp(13), 0, dp(14), 0);
+            moonBtn.setPadding(dp(11), 0, dp(12), 0);
         } else {
             moonText.setVisibility(View.GONE);
-            moonBtn.setPadding(dp(11.5f), 0, dp(11.5f), 0);
+            moonBtn.setPadding(dp((topBtnDp - topIconDp) / 2f), 0, dp((topBtnDp - topIconDp) / 2f), 0);
         }
         moonBtn.setMinimumWidth(mSize);
         // Without the timer text the button is a plain circle: pin its width so the glass is never
@@ -546,6 +702,83 @@ final class SceneHome {
 
     /** Where the Keep Watching shelf sits. WatchPopup lines its row up with the same spot. */
     static final float SHELF_LEFT_DP = 40, SHELF_TOP_DP = 312, SHELF_HEADER_GAP_DP = 7;
+    static final int SHELF_TOP_MIN_DP = 150, SHELF_TOP_MAX_DP = 400;
+
+    /** Where the shelf's top edge sits (dp), moved up or down from the home editor. */
+    static float shelfTopDp(android.content.Context c) {
+        float v = Profiles.homePrefs(c).getFloat("shelf_top_dp", SHELF_TOP_DP);
+        return Math.max(SHELF_TOP_MIN_DP, Math.min(SHELF_TOP_MAX_DP, v));
+    }
+
+    static void setShelfTopDp(android.content.Context c, float v) {
+        Profiles.homePrefs(c).edit()
+                .putFloat("shelf_top_dp", Math.max(SHELF_TOP_MIN_DP, Math.min(SHELF_TOP_MAX_DP, v))).apply();
+    }
+
+    private LinearLayout shelfGhost;
+
+    /** A temporary outline of the shelf, shown while its position is changed in the home editor. */
+    void showShelfGhost(boolean show) {
+        if (!show) {
+            if (shelfGhost != null) {
+                overlay.removeView(shelfGhost);
+                shelfGhost = null;
+            }
+            return;
+        }
+        if (shelfGhost == null) {
+            int pad = dp(SHELF_HEADER_GAP_DP);
+            shelfGhost = new LinearLayout(host);
+            shelfGhost.setOrientation(LinearLayout.VERTICAL);
+            TextView h = new TextView(host);
+            Ui.textSize(h, 11.5f);
+            h.setTypeface(Ui.font(host, "semibold"));
+            h.setTextColor(0xE6FFFFFF);
+            h.setShadowLayer(dp(6), 0, dp(1), 0x80000000);
+            h.setText(I18n.s(host, "Continue watching", "İzlemeye devam et"));
+            LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            hlp.leftMargin = pad + dp(2);
+            shelfGhost.addView(h, hlp);
+            LinearLayout row = new LinearLayout(host);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setPadding(pad, pad, pad, pad);
+            for (int i = 0; i < 3; i++) {
+                View card = new View(host);
+                GradientDrawable g = new GradientDrawable();
+                g.setCornerRadius(dp(18));
+                g.setColor(0x33FFFFFF);
+                g.setStroke(Math.max(1, dp(1.5f)), 0xCCFFFFFF, dp(6), dp(4));
+                card.setBackground(g);
+                LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(dp(SHELF_CARD_W_DP), dp(SHELF_CARD_H_DP));
+                if (i > 0) clp.leftMargin = dp(SHELF_CARD_GAP_DP);
+                row.addView(card, clp);
+            }
+            shelfGhost.addView(row);
+            FrameLayout.LayoutParams glp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP | Gravity.START);
+            glp.leftMargin = dp(SHELF_LEFT_DP) - pad;
+            glp.rightMargin = dp(SHELF_LEFT_DP) - pad;
+            overlay.addView(shelfGhost, glp);
+        }
+        ViewGroup.LayoutParams raw = shelfGhost.getLayoutParams();
+        if (raw instanceof FrameLayout.LayoutParams) {
+            ((FrameLayout.LayoutParams) raw).topMargin = dp(shelfTopDp(host));
+            shelfGhost.setLayoutParams(raw);
+        }
+    }
+
+    /** Moves the shelf to the saved position. */
+    void applyShelfPosition() {
+        if (shelfGhost != null) showShelfGhost(true);
+        if (shelfBox == null) return;
+        ViewGroup.LayoutParams raw = shelfBox.getLayoutParams();
+        if (raw instanceof FrameLayout.LayoutParams) {
+            ((FrameLayout.LayoutParams) raw).topMargin = dp(shelfTopDp(host));
+            shelfBox.setLayoutParams(raw);
+        }
+    }
     static final float SHELF_CARD_W_DP = 282, SHELF_CARD_H_DP = 64, SHELF_CARD_GAP_DP = 12;
 
     private void buildKeepWatchingShelf() {
@@ -594,7 +827,7 @@ final class SceneHome {
                 Gravity.TOP | Gravity.START);
         slp.leftMargin = dp(SHELF_LEFT_DP) - pad;
         slp.rightMargin = dp(SHELF_LEFT_DP) - pad;
-        slp.topMargin = dp(SHELF_TOP_DP);
+        slp.topMargin = dp(shelfTopDp(host));
         overlay.addView(shelfBox, slp);
     }
 
@@ -2480,7 +2713,7 @@ final class SceneHome {
         }
 
         // Top Bar navigation
-        View[] topRow = {whoBar, remoteBtn, weatherBtn, moonBtn};
+        View[] topRow = {whoBar, remoteBtn, weatherBtn, nextWallBtn, moonBtn};
         int topIdx = -1;
         for (int i = 0; i < topRow.length; i++) if (topRow[i] != null && topRow[i] == f) topIdx = i;
         if (topIdx >= 0) {

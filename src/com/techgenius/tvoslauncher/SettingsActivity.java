@@ -1085,6 +1085,13 @@ public class SettingsActivity extends Activity {
                     Widgets.setEnabled(this, !Widgets.enabled(this));
                     refreshAll();
                 });
+        row(tr("Low memory mode (1080p wallpapers)", "Düşük bellek modu (1080p duvar kâğıdı)"),
+                () -> Scenes.isLowMemoryMode(this) ? tr("On", "Açık") : tr("Off", "Kapalı"),
+                () -> {
+                    Scenes.setLowMemoryMode(this, !Scenes.isLowMemoryMode(this));
+                    refreshAll();
+                    if (MainActivity.activeInstance != null) MainActivity.activeInstance.recreate();
+                });
         row(tr("Classic Top Shelf suggestions", "Klasik Üst Raf önerileri"), () -> {
             switch (Suggestions.shelf(this)) {
                 case Suggestions.SHELF_RECS: return tr("Recommendations", "Öneriler");

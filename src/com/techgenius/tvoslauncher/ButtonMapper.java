@@ -195,7 +195,7 @@ public final class ButtonMapper {
             RecentAppsOverlay.dismiss();
         } catch (Throwable ignored) { }
         try {
-            Intent home = new Intent(c, MainActivity.class)
+            Intent home = MainActivity.homeIntent(c)
                     .setAction(Intent.ACTION_MAIN)
                     .addCategory(Intent.CATEGORY_HOME)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
@@ -1007,7 +1007,7 @@ public final class ButtonMapper {
                         } else if (keyCode == KeyEvent.KEYCODE_TV_INPUT) {
                             ControlPanelOverlay.openInputs(appCtx, null);
                         } else if (keyCode == KeyEvent.KEYCODE_SEARCH) {
-                            Intent s = new Intent(appCtx, MainActivity.class)
+                            Intent s = MainActivity.homeIntent(appCtx)
                                     .putExtra("panel", "search")
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                             appCtx.startActivity(s);

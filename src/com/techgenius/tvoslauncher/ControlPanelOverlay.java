@@ -99,7 +99,7 @@ public final class ControlPanelOverlay {
                 // Fall back to MainActivity panel
             }
         }
-        Intent i = new Intent(c, MainActivity.class)
+        Intent i = MainActivity.homeIntent(c)
                 .putExtra("panel", "cc")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         try {
@@ -285,6 +285,23 @@ public final class ControlPanelOverlay {
             Runnable onButtonMapper,
             Runnable onSettings,
             Runnable onSearch) {
+        return buildControlPanelView(c, screenW, screenH, unit, glassSource, outCells,
+                onInputs, onButtonMapper, onSettings, onSearch, null);
+    }
+
+    /** Same panel; onEditHome (may be null) adds the "Edit Home Screen" tile. */
+    public static FrameLayout buildControlPanelView(
+            Context c,
+            int screenW,
+            int screenH,
+            float unit,
+            MainActivity.LiquidGlass.Backdrop glassSource,
+            List<View> outCells,
+            Runnable onInputs,
+            Runnable onButtonMapper,
+            Runnable onSettings,
+            Runnable onSearch,
+            Runnable onEditHome) {
 
         int col = dp(unit, 141);
         int gap = dp(unit, 11);
@@ -381,11 +398,12 @@ public final class ControlPanelOverlay {
         int capsuleRows = (capsules.size() + 1) / 2;
         int y4 = capsuleRows > 0 ? capsuleRows * (cap + gap) : 0;
 
-        String[] itemKeys = {ITEM_INPUTS, ITEM_MAPPER, ITEM_SETTINGS, ITEM_SEARCH};
-        String[] icons = {"input", "remote", "gear", "search"};
-        Runnable[] actions = {onInputs, onButtonMapper, onSettings, onSearch};
+        String[] itemKeys = {ITEM_INPUTS, ITEM_MAPPER, ITEM_SETTINGS, ITEM_SEARCH, ITEM_EDIT_HOME};
+        String[] icons = {"input", "remote", "gear", "search", "sliders"};
+        Runnable[] actions = {onInputs, onButtonMapper, onSettings, onSearch, onEditHome};
         List<Integer> enabledSmallIdx = new ArrayList<>();
         for (int i = 0; i < itemKeys.length; i++) {
+            if (actions[i] == null && ITEM_EDIT_HOME.equals(itemKeys[i])) continue;
             if (isItemEnabled(c, itemKeys[i])) {
                 enabledSmallIdx.add(i);
             }
@@ -397,14 +415,16 @@ public final class ControlPanelOverlay {
         for (int sIdx = 0; sIdx < enabledSmallIdx.size(); sIdx++) {
             int i = enabledSmallIdx.get(sIdx);
             final Runnable act = actions[i];
-            outCells.add(makeTile(c, panel, sIdx * (small + gap), y4, small, small, unit, screenW, screenH, glassSource,
+            outCells.add(makeTile(c, panel, (sIdx % 4) * (small + gap), y4 + (sIdx / 4) * (small + gap),
+                    small, small, unit, screenW, screenH, glassSource,
                     icons[i], null, null, v -> {
                         if (act != null) act.run();
                     }));
         }
 
+        int smallRows = (enabledSmallIdx.size() + 3) / 4;
         int totalH = !enabledSmallIdx.isEmpty()
-                ? (y4 + small)
+                ? (y4 + smallRows * (small + gap) - gap)
                 : Math.max(cap, capsuleRows * (cap + gap) - gap);
         FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(w, totalH, Gravity.TOP | Gravity.END);
         plp.topMargin = dp(unit, 36);
@@ -781,6 +801,7 @@ public final class ControlPanelOverlay {
     public static final String ITEM_MAPPER = "mapper";
     public static final String ITEM_SETTINGS = "settings";
     public static final String ITEM_SEARCH = "search";
+    public static final String ITEM_EDIT_HOME = "edit_home";
 
     public static final String[][] ALL_CP_ITEMS = {
         {ITEM_WIFI, "Wi-Fi", "Wi-Fi"},
@@ -794,7 +815,8 @@ public final class ControlPanelOverlay {
         {ITEM_INPUTS, "TV Inputs Shortcut", "TV Girişleri Kısayolu"},
         {ITEM_MAPPER, "Button Mapper Shortcut", "Tuş Atayıcı Kısayolu"},
         {ITEM_SETTINGS, "Settings Shortcut", "Ayarlar Kısayolu"},
-        {ITEM_SEARCH, "Search / Assistant Shortcut", "Arama / Asistan Kısayolu"}
+        {ITEM_SEARCH, "Search / Assistant Shortcut", "Arama / Asistan Kısayolu"},
+        {ITEM_EDIT_HOME, "Edit Home Screen", "Ana Ekranı Düzenle"}
     };
 
     public static android.content.SharedPreferences cpPrefs(Context c) {
