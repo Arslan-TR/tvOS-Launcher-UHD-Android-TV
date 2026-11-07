@@ -22,7 +22,7 @@ Anahtar kelimeler: Android TV launcher, Google TV launcher, tvOS launcher, Apple
 | **Telefonda TV Paneli** | Bellek ve depolama durumu, bellek boşaltma, uyku zamanlayıcı, ekran koruyucu ayarları ve video yükleme; hepsi telefon kumandasında (dişli → TV Paneli). |
 | **Ekran koruyucu (DreamService)** | Rastgele sırada sessiz videolar; video yoksa kodla çizilen hareketli şömine. Üstünde büyük saat ve tarih. Paneli korumak için saat yavaşça kayar, gece yarısından sonra görüntü kararır. |
 | **Ana ekranı düzenle** | Kontrol merkezindeki bir düğme, ana ekranın üstünde kumandayla kullanılan bir düzenleyici açar: saat boyutu, kalınlığı (çok inceye kadar), stili, konumu, düz/cam görünümü ve saydamlığı; takvim ve analog saat widget'larını açma-kapama, boyut ve konum; sağ üst düğme boyutu; İzlemeye Devam Et açma-kapama, içerik ve dikey konum (taşırken şablon görünür). |
-| **Telefon ana ekranında kumanda** | Telefon kumandası sayfasının bir web uygulaması tanımı ve simgesi var: Chrome'da "Ana ekrana ekle" ile "Kumanda" simgesi oluşur. Bağlantı anahtarı telefonun tarayıcısında saklanır, tanımda anahtar yoktur. (Ev ağında düz HTTP olduğu için Android bunu tam kurulu uygulama değil kısayol olarak ekler.) |
+| **Telefon ana ekranında kumanda** | Telefon kumandası sayfasının bir web uygulaması tanımı ve simgesi var: Chrome'da "Ana ekrana ekle" ile "Kumanda" simgesi oluşur. Bağlantı anahtarı telefonun tarayıcısında saklanır, tanımda anahtar yoktur. Ev ağındaki düz HTTP güvenli sayılmadığı için Chrome yalnızca kısayol ekler; tam kurulum için kumandanın "Diğer Tuşlar" menüsündeki "Uygulama olarak yükle" bölümü `chrome://flags/#unsafely-treat-insecure-origin-as-secure` adresini ve kumandanın kendi adresini kopyalar (web sayfaları `chrome://` açamaz), Chrome izin verince "Şimdi yükle" düğmesini gösterir. |
 | **Sonraki duvar kâğıdı düğmesi** | Sağ üstteki yuvarlak düğme bir sonraki duvar kâğıdına hemen geçer. |
 | **Telefondan duvar kâğıdı yükleme** | TV Paneli → Duvar kâğıdı yükle, resimleri (jpg, png, webp) TV'de `Pictures/Kumandadan` klasörüne kaydeder; klasör yoksa oluşturur. |
 | **Ana ekrana akıcı dönüş** | Uygulamadan dönünce duvar kâğıdı, alt koyu geçiş ve saat hemen görünür (siyah kare yok, saat sıçramaz). Saat, duvar kâğıdı yüzeyinin üstündeki normal bir görünümde çizilir. |
@@ -103,7 +103,7 @@ JDK 17+, Android SDK build-tools 34.0.0 ve platform android-34. Gradle gerekmez.
 
 ```bash
 ./build.sh                                   # -> build/tvos-home.apk (debug imzalı)
-VERSION_CODE=178 VERSION_NAME=2.1.2-uhd36 PKG=com.ornek.tvoslauncher ./build.sh
+VERSION_CODE=179 VERSION_NAME=2.1.2-uhd37 PKG=com.ornek.tvoslauncher ./build.sh
 ```
 
 `PKG` uygulama kimliğini değiştirir. Kimlik ve imza anahtarı aynı kaldıkça güncelleme verileri korur; her derlemede

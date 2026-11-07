@@ -562,6 +562,18 @@ svg.f{fill:currentColor;stroke:none}
   <div class="sh-list g">
     <button id="vib"><svg viewBox="0 0 24 24"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11m0-2a1.5 1.5 0 0 1 3 0v2m0-.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L4 14.5a1.5 1.5 0 0 1 2.5-1.6L9 15"/></svg><span>Dokunuş Titreşimi</span><span class="sw on" id="vsw"></span></button>
   </div>
+
+  <div id="pwa" style="display:none">
+    <div class="sh-lab">Uygulama olarak yükle</div>
+    <div class="tp-box">
+      <div class="tp-row" id="pwainfo">Chrome, kumandayı yalnızca bu adres güvenli sayılırsa uygulama olarak kurar. Tarayıcı güvenlik nedeniyle chrome:// sayfalarını açtırmaz; adresler kopyalanır, siz yapıştırırsınız.</div>
+      <button class="tp-act g" id="pwa1">1. Chrome ayar adresini kopyala</button>
+      <div class="tp-row" style="margin-top:6px">Yeni sekmede adres çubuğuna yapıştırıp açın.</div>
+      <button class="tp-act g" id="pwa2">2. Kumanda adresini kopyala</button>
+      <div class="tp-row" style="margin-top:6px">Açılan ayardaki kutuya yapıştırın, yanını <b>Enabled</b> yapın, alttaki <b>Relaunch</b> düğmesine basın.</div>
+      <button class="tp-act g" id="pwa3" style="display:none">3. Şimdi yükle</button>
+    </div>
+  </div>
 </div></div>
 
 <div id="wsheet"><div class="card">
@@ -931,6 +943,24 @@ $('lclear').onclick=async()=>{const j=await api('histclear');if(j&&j.hist){BR=j;
 $('nb_iptx').textContent=location.hostname;
 $('nb_ip').onclick=()=>{const t=document.createElement('textarea');t.value=location.origin;document.body.appendChild(t);t.select();
   try{document.execCommand('copy');say('adres kopyalandı')}catch(e){say(location.origin)}t.remove()};
+
+/* install as an app: Chrome installs only from a secure origin; a page may not open chrome:// itself */
+(function(){
+  const FLAG='chrome://flags/#unsafely-treat-insecure-origin-as-secure';
+  const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+  if(standalone)return;
+  $('pwa').style.display='block';
+  const copy=(v,msg)=>{const t=document.createElement('textarea');t.value=v;document.body.appendChild(t);t.select();
+    try{document.execCommand('copy');say(msg)}catch(e){say(v)}t.remove()};
+  $('pwa1').onclick=()=>copy(FLAG,'ayar adresi kopyalandı');
+  $('pwa2').onclick=()=>copy(location.origin,'kumanda adresi kopyalandı');
+  if(window.isSecureContext)$('pwainfo').textContent='Bu adres güvenli sayılıyor. Yükleme düğmesi görünmezse Chrome menüsünden "Uygulamayı yükle"yi seçin.';
+  let deferred=null;
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e;$('pwa3').style.display='block';
+    $('pwainfo').textContent='Kumanda uygulama olarak yüklenmeye hazır.'});
+  $('pwa3').onclick=async()=>{if(!deferred)return;deferred.prompt();try{await deferred.userChoice}catch(e){}deferred=null;$('pwa3').style.display='none'};
+  window.addEventListener('appinstalled',()=>{$('pwa').style.display='none';say('kumanda yüklendi')});
+})();
 
 /* settings sheet */
 (function(){
